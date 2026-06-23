@@ -1,0 +1,1 @@
+# Singleton ChromaDB client

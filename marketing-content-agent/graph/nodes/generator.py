@@ -1,0 +1,2 @@
+# Agent B — RAG + generation
+
