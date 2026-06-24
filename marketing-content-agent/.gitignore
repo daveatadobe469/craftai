@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+#.env.*
+*.keras
+
+# Data and models
+data/
+models/
+
+# IDE
+.vscode/
