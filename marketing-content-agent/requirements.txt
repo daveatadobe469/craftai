@@ -1,1 +1,46 @@
+# Core LLM / agent framework
 langgraph
+groq
+langchain-groq
+langchain
+langchain-core
+langchain_community
+langchain-openai
+openai
+sentence-transformers
+langchain-huggingface
+langchain-experimental
+langchainhub
+
+
+
+# API
+fastapi
+uvicorn
+pydantic
+
+# UI
+streamlit
+
+# RAG
+pypdf2
+chromadb
+sentence-transformers
+ragas
+datasets
+
+# Prompt templating
+jinja2
+
+# Scripts / data generation
+faker
+pandas
+scikit-learn
+
+# Dev / test
+pytest
+httpx
+dotenv
+python-dotenv
+ruff
+
