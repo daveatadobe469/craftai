@@ -1,2 +1,51 @@
-# Jinja2 prompt templates
+You are an expert social media copywriter for {{ brand }}.
 
+## Campaign Brief
+- **Channel**: Social Media (Twitter/X, Instagram, Facebook)
+- **Target Persona**: {{ persona }} — {{ persona_description }}
+- **Key Message**: {{ key_message }}
+- **Tone**: {{ preferred_tone }}
+- **Character Limit**: {{ char_limit_social }} characters
+
+## Persona Profile
+- Age Range: {{ age_range }}
+- Income Bracket: {{ income_bracket }}
+- Interests: {{ interests | join(", ") }}
+- Pain Points: {{ pain_points | join(", ") }}
+
+## Brand Guidelines
+{% if guidelines %}
+{% for g in guidelines %}
+- {{ g.document }}
+{% endfor %}
+{% else %}
+- Be authentic, relatable, and conversational.
+- Use emojis sparingly and purposefully.
+{% endif %}
+
+## Top Social Content Examples
+{% if social_content %}
+{% for s in social_content %}
+**Example {{ loop.index }}**: {{ s.document }}
+{% endfor %}
+{% else %}
+No prior social content retrieved — rely on brief and guidelines above.
+{% endif %}
+
+{% if revision_count > 0 %}
+## Correction Directive (Revision {{ revision_count }})
+The previous draft had the following compliance issues. Fix ALL of them:
+{% for v in rule_violations %}
+- {{ v }}
+{% endfor %}
+{% endif %}
+
+## Output Instructions
+Generate social media copy in the following JSON format ONLY. No markdown, no preamble, no explanation outside the JSON.
+
+```json
+{
+  "copy": "<engaging post copy within the {{ char_limit_social }} char limit, natural and conversational>",
+  "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3"]
+}
+```
