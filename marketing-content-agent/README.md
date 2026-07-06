@@ -9,8 +9,23 @@
   brand-compliant marketing content — powered by **LangGraph**, **Agentic RAG (ChromaDB)**,
   **FastAPI**, **Streamlit**, and **MLflow**.
 </div>
-
 ---
+
+## Project Team
+|SNo | Name |
+|-----|-------|
+|1| Abhinao Shrivastava |
+|2| Amit Pandey |
+|3| Asha Pathik |
+|4| Devendra Dave |
+|5| Dipen Sen |
+|6| Guruprasad Ramamoorthi |
+|7| Harish P |
+|8| Jeevan Eranti |
+|9| Narayana Murthy |
+|10| Piyush Sinha |
+|11| Sunil Kumar Sahu |
+
 
 ## 1. Project Purpose
 
