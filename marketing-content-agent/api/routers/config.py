@@ -66,6 +66,7 @@ _GROQ_MODELS = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
     "gemma-7b-it",
+    "openai/gpt-oss-120b",
 ]
 
 _EMBEDDING_MODELS = [
