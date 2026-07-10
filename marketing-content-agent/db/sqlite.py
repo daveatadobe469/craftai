@@ -153,6 +153,48 @@ def get_personas() -> list[dict[str, Any]]:
     return result
 
 
+def upsert_persona(
+    name: str,
+    description: str,
+    age_range: str = "25-45",
+    income_bracket: str = "middle",
+    interests: list[str] | None = None,
+    pain_points: list[str] | None = None,
+    preferred_tone: str = "professional",
+    char_limit_email: int = 500,
+    char_limit_social: int = 280,
+    char_limit_linkedin: int = 700,
+    char_limit_ad: int = 150,
+    char_limit_blog: int = 2000,
+) -> None:
+    """Insert or update a persona by name (mirrors write_brief's ON CONFLICT pattern)."""
+    sql = """
+        INSERT INTO personas
+            (name, description, age_range, income_bracket, interests, pain_points,
+             preferred_tone, char_limit_email, char_limit_social, char_limit_linkedin,
+             char_limit_ad, char_limit_blog)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            description=excluded.description, age_range=excluded.age_range,
+            income_bracket=excluded.income_bracket, interests=excluded.interests,
+            pain_points=excluded.pain_points, preferred_tone=excluded.preferred_tone,
+            char_limit_email=excluded.char_limit_email,
+            char_limit_social=excluded.char_limit_social,
+            char_limit_linkedin=excluded.char_limit_linkedin,
+            char_limit_ad=excluded.char_limit_ad,
+            char_limit_blog=excluded.char_limit_blog
+    """
+    with _connect() as conn:
+        conn.execute(sql, (
+            name, description, age_range, income_bracket,
+            json.dumps(interests or []),
+            json.dumps(pain_points or []),
+            preferred_tone,
+            char_limit_email, char_limit_social, char_limit_linkedin,
+            char_limit_ad, char_limit_blog,
+        ))
+
+
 def get_persona(name: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM personas WHERE name=?", (name,)).fetchone()
