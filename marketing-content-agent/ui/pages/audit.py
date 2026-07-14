@@ -95,7 +95,7 @@ def render() -> None:
                 "persona": "Persona", "key_message": "Key Message",
                 "status": "Status", "created_at": "Created",
             })
-            df["Brief ID"] = df["Brief ID"].str[:8] + "…"
+            # Keep the full Brief ID so it can be copied and used for search.
 
             _status_colour = {
                 "pending": "🟡", "processing": "🔵",
@@ -139,7 +139,7 @@ def render() -> None:
         else:
             df_d = pd.DataFrame(drafts)
             df_d["draft_id"] = df_d["draft_id"].str[:8] + "…"
-            df_d["brief_id"] = df_d["brief_id"].str[:8] + "…"
+            # Keep the full Brief ID so it can be copied and used for search.
             df_d["compliance_pass"] = df_d["compliance_pass"].apply(lambda v: "✅" if v else "❌")
             df_d["judge_score"] = df_d["judge_score"].apply(
                 lambda v: f"{v:.2f}" if v is not None else "—"
