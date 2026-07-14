@@ -366,3 +366,5 @@ marketing-content-agent/
 - `Dockerfile`, `scripts/reindex_chroma.py`, and `ui/components/trace.py` are placeholders.
 - `ui/app.ppy` is a non-executed backup of `app.py`.
 - Switching the embedding model requires re-indexing the knowledge base (`make index`).
+
+----
