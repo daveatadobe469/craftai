@@ -9,6 +9,7 @@
   brand-compliant marketing content — powered by **LangGraph**, **Agentic RAG (ChromaDB)**,
   **FastAPI**, **Streamlit**, and **MLflow**.
 </div>
+
 ---
 
 ## Project Team
@@ -25,6 +26,8 @@
 |9| Narayana Murthy |
 |10| Piyush Sinha |
 |11| Sunil Kumar Sahu |
+
+---
 
 
 ## 1. Project Purpose
