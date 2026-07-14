@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import uuid
 from typing import Annotated
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel
 from db.sqlite import write_audit
 from rag import chroma_client as cc
 from rag import embedder
+from rag.text_extraction import chunk_text, extract_text
 
 router = APIRouter()
 
@@ -44,56 +44,6 @@ class IngestListResponse(BaseModel):
     collection: str
     total_documents: int
     sample: list[dict]
-
-
-def _extract_text(content: bytes, filename: str) -> str:
-    """
-    Extract plain text from an uploaded file.
-    Supports: .txt, .md, .csv, .json, .pdf, .docx
-    Falls back to UTF-8 decode with error replacement for unknown types.
-    """
-    fname = filename.lower()
-
-    if fname.endswith(".pdf"):
-        try:
-            import pdfminer.high_level as pdfminer
-            return pdfminer.extract_text(io.BytesIO(content))
-        except ImportError:
-            try:
-                import pypdf
-
-                reader = pypdf.PdfReader(io.BytesIO(content))
-                pages = [page.extract_text() or "" for page in reader.pages]
-                return "\n\n".join(pages)
-            except ImportError:
-                return content.decode("utf-8", errors="replace")
-
-    if fname.endswith(".docx"):
-        try:
-            import docx
-
-            doc = docx.Document(io.BytesIO(content))
-            return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        except ImportError:
-            return content.decode("utf-8", errors="replace")
-
-    return content.decode("utf-8", errors="replace")
-
-
-def _chunk_text(text: str, chunk_size: int = 512, chunk_overlap: int = 64) -> list[str]:
-    """
-    Chunk text using LangChain's RecursiveCharacterTextSplitter.
-    Returns a list of non-empty string chunks.
-    """
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-    chunks = splitter.split_text(text)
-    return [c.strip() for c in chunks if c.strip()]
 
 
 @router.post("/ingest", response_model=IngestResponse, status_code=201)
@@ -133,12 +83,12 @@ async def ingest_document(
     loop = asyncio.get_event_loop()
     filename = file.filename or "upload.txt"
 
-    text = await loop.run_in_executor(None, _extract_text, raw_content, filename)
+    text = await loop.run_in_executor(None, extract_text, raw_content, filename)
     text = text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="Could not extract any text from the uploaded file.")
 
-    chunks = await loop.run_in_executor(None, _chunk_text, text, chunk_size, chunk_overlap)
+    chunks = await loop.run_in_executor(None, chunk_text, text, chunk_size, chunk_overlap)
     if not chunks:
         raise HTTPException(status_code=422, detail="Text extracted but produced zero chunks.")
 

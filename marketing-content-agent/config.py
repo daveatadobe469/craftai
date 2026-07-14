@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "./data/chroma"
     SQLITE_DB_PATH: str = "./data/craftai.db"
 
+    # ── Auto-ingestion ───────────────────────────────────────────────────────
+    # Files dropped here are embedded into the brand_guidelines collection
+    # automatically on API startup — no manual upload needed.
+    BRAND_GUIDELINE_FOLDER: str = "./brand_guideline"
+
     # ── MLflow ────────────────────────────────────────────────────────────────
     # Use SQLite backend — the old file-store is deprecated in MLflow >= 2.16
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
@@ -50,6 +55,7 @@ class Settings(BaseSettings):
     def _ensure_data_dirs(self) -> Settings:
         os.makedirs(os.path.dirname(self.SQLITE_DB_PATH) or ".", exist_ok=True)
         os.makedirs(self.CHROMA_PERSIST_DIR, exist_ok=True)
+        os.makedirs(self.BRAND_GUIDELINE_FOLDER, exist_ok=True)
         # MLflow URI is sqlite:///./data/mlflow.db — extract and create the data dir only
         mlflow_uri = self.MLFLOW_TRACKING_URI
         if mlflow_uri.startswith("sqlite:///"):
