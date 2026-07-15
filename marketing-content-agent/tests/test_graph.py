@@ -159,7 +159,6 @@ async def test_orchestrator_valid_brief_sets_plan():
 
     with patch("graph.nodes.orchestrator.get_persona", return_value=None), \
          patch("graph.nodes.orchestrator.write_audit"), \
-         patch("graph.nodes.orchestrator.get_llm", return_value=mock_llm), \
          patch("graph.nodes.orchestrator.mlflow") as mock_mlflow:
         mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
         mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
@@ -196,7 +195,6 @@ async def test_graph_ainvoke_sets_draft():
 
     with patch("graph.nodes.orchestrator.get_persona", return_value=None), \
          patch("graph.nodes.orchestrator.write_audit"), \
-         patch("graph.nodes.orchestrator.get_llm", return_value=mock_llm), \
          patch("graph.nodes.orchestrator.mlflow") as mock_mlflow_orch, \
          patch("graph.nodes.generator.get_llm", return_value=mock_llm), \
          patch("graph.nodes.generator.retrieve_with_hyde", return_value=[]), \
@@ -210,7 +208,7 @@ async def test_graph_ainvoke_sets_draft():
          patch("graph.nodes.compliance.score_draft", return_value=(0.85, "Good.")), \
          patch("graph.nodes.compliance.mlflow") as mock_mlflow_comp, \
          patch("graph.nodes.compliance.settings") as mock_settings_comp, \
-         patch("graph.nodes.human_gate._events", {"__test__": asyncio.Event()}):
+         patch("graph.nodes.human_gate._GATE_TIMEOUT_SECONDS", 0.1):
 
         mock_settings_comp.MAX_REVISIONS = 3
         mock_settings_comp.JUDGE_THRESHOLD = 0.7

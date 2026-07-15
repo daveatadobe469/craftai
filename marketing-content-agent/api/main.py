@@ -69,7 +69,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from api.routers import audit, brief, config, decision, ingest, search, status, stream
+from api.routers import audit, brief, config, decision, ingest, personas, search, status, stream
 
 app.include_router(brief.router,    prefix="/api/v1", tags=["Brief"])
 app.include_router(status.router,   prefix="/api/v1", tags=["Status"])
@@ -79,6 +79,7 @@ app.include_router(stream.router,   prefix="/api/v1", tags=["Stream"])
 app.include_router(ingest.router,   prefix="/api/v1", tags=["Ingest"])
 app.include_router(config.router,   prefix="/api/v1", tags=["Config"])
 app.include_router(audit.router,    prefix="/api/v1", tags=["Audit"])
+app.include_router(personas.router, prefix="/api/v1", tags=["Personas"])
 
 
 @app.get("/health", tags=["Health"])

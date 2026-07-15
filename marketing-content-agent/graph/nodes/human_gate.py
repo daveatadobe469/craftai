@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from db.sqlite import update_brief_status
 from graph.state import AgentState
 
 if TYPE_CHECKING:
@@ -80,6 +81,9 @@ async def human_gate_node(state: AgentState) -> AgentState:
             await asyncio.wait_for(event.wait(), timeout=_GATE_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             sse_events.append("[HumanGate] Timeout — auto-rejecting after 30 minutes.")
+            await asyncio.get_event_loop().run_in_executor(
+                None, update_brief_status, brief_id, "rejected"
+            )
             return {
                 **state,
                 "human_decision": "rejected",
@@ -97,6 +101,11 @@ async def human_gate_node(state: AgentState) -> AgentState:
         reviewed_at = payload.get("reviewed_at", datetime.now(timezone.utc))
 
         _events.pop(brief_id, None)
+
+        if human_decision == "rejected":
+            await asyncio.get_event_loop().run_in_executor(
+                None, update_brief_status, brief_id, "rejected"
+            )
 
         sse_events.append(
             f"[HumanGate] Decision received: {human_decision} by {reviewed_by}."

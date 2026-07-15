@@ -10,6 +10,23 @@ import streamlit as st
 
 _PIPELINE_TIMEOUT_S = 180
 
+# Fallback list if the API is unreachable (original seeded personas).
+_DEFAULT_PERSONAS = [
+    "Budget-Conscious", "Premium Buyer", "Family Planner", "Young Professional",
+]
+
+
+@st.cache_data(ttl=60)
+def _fetch_persona_names(api_base: str) -> list[str]:
+    """Load persona names from the backend; fall back to defaults on error."""
+    try:
+        r = httpx.get(f"{api_base}/personas", timeout=10.0)
+        r.raise_for_status()
+        names = r.json().get("names", [])
+        return names or _DEFAULT_PERSONAS
+    except Exception:
+        return _DEFAULT_PERSONAS
+
 # ── Step data model ────────────────────────────────────────────────────────────
 Status = Literal["pending", "running", "done", "error", "waiting"]
 
@@ -481,8 +498,7 @@ def render() -> None:
         with col2:
             persona = st.selectbox(
                 "Target Persona *",
-                options=["Budget-Conscious", "Premium Buyer",
-                         "Family Planner", "Young Professional"],
+                options=_fetch_persona_names(api_base),
             )
         key_message = st.text_area(
             "Key Message *",

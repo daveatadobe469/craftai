@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # automatically on API startup — no manual upload needed.
     BRAND_GUIDELINE_FOLDER: str = "./brand_guideline"
 
+    # Folder holding generated persona JSON files (P0*.json) to seed the personas table.
+    PERSONAS_DIR: str = "./data/personas"
+
     # ── MLflow ────────────────────────────────────────────────────────────────
     # Use SQLite backend — the old file-store is deprecated in MLflow >= 2.16
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
