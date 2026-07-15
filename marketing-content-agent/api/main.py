@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.sqlite import create_tables
 from rag.chroma_client import init_collections
-from rag.folder_ingest import ingest_brand_guideline_folder
 
 
 @asynccontextmanager
@@ -23,14 +22,6 @@ async def lifespan(app: FastAPI):
     create_tables()
 
     init_collections()
-
-    loop = asyncio.get_event_loop()
-    summary = await loop.run_in_executor(None, ingest_brand_guideline_folder)
-    if summary["ingested"] or summary["failed"]:
-        print(
-            f"📋 Brand guideline auto-ingest: {summary['ingested']} ingested, "
-            f"{summary['skipped']} unchanged, {summary['failed']} failed."
-        )
 
     try:
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
