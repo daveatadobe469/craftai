@@ -94,10 +94,6 @@ def seed_if_needed() -> None:
             [sys.executable, str(ROOT / "scripts" / "generate_guidelines.py")],
             cwd=str(ROOT),
         )
-        subprocess.check_call(
-            [sys.executable, str(ROOT / "scripts" / "seed_personas.py")],
-            cwd=str(ROOT),
-        )
         ok("Knowledge base seeded.")
     except subprocess.CalledProcessError as exc:
         warn(f"Seeding failed ({exc}). App will start but RAG context will be empty.")
