@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from api.sse_queues import push_sync
 from graph.state import AgentState
 
 if TYPE_CHECKING:
@@ -13,6 +14,7 @@ _GATE_TIMEOUT_SECONDS: int = 30 * 60
 
 _events: dict[str, asyncio.Event] = {}
 _decisions: dict[str, dict[str, Any]] = {}
+_locks: dict[str, asyncio.Lock] = {}
 
 
 def _ensure_event(brief_id: str) -> asyncio.Event:
@@ -21,19 +23,57 @@ def _ensure_event(brief_id: str) -> asyncio.Event:
     return _events[brief_id]
 
 
-def set_decision(brief_id: str, decision: str, edits: str | None = None, reviewer: str = "human") -> None:
+def _ensure_lock(brief_id: str) -> asyncio.Lock:
+    if brief_id not in _locks:
+        _locks[brief_id] = asyncio.Lock()
+    return _locks[brief_id]
+
+
+def _payload_from_decision(
+    state: AgentState,
+    payload: dict[str, Any],
+    errors: list[str],
+    sse_events: list[str],
+) -> AgentState:
+    human_decision = payload.get("human_decision", "rejected")
+    human_edits = payload.get("human_edits")
+    reviewed_by = payload.get("reviewed_by", "unknown")
+    reviewed_at = payload.get("reviewed_at", datetime.now(timezone.utc))
+
+    sse_events.append(
+        f"[HumanGate] Decision received: {human_decision} by {reviewed_by}."
+    )
+
+    return {
+        **state,
+        "human_decision": human_decision,
+        "human_edits": human_edits,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "errors": errors,
+        "sse_events": sse_events,
+    }
+
+
+async def set_decision(
+    brief_id: str,
+    decision: str,
+    edits: str | None = None,
+    reviewer: str = "human",
+) -> None:
     """
-    Called externally (from the API decision endpoint) to unblock the gate.
+    Called from the API decision endpoint to unblock the gate.
     Stores the decision payload and sets the asyncio.Event.
     """
-    _decisions[brief_id] = {
-        "human_decision": decision,
-        "human_edits": edits,
-        "reviewed_by": reviewer,
-        "reviewed_at": datetime.now(timezone.utc),
-    }
-    event = _ensure_event(brief_id)
-    event.set()
+    lock = _ensure_lock(brief_id)
+    async with lock:
+        _decisions[brief_id] = {
+            "human_decision": decision,
+            "human_edits": edits,
+            "reviewed_by": reviewer,
+            "reviewed_at": datetime.now(timezone.utc),
+        }
+        _ensure_event(brief_id).set()
 
 
 def route(state: AgentState) -> str:
@@ -58,8 +98,6 @@ async def human_gate_node(state: AgentState) -> AgentState:
 
     try:
         brief_id = state["brief_id"]
-        draft = state.get("draft", "")
-        channel = state["channel"]
         judge_score = state.get("judge_score", 0.0)
         compliance_pass = state.get("compliance_pass", False)
 
@@ -70,11 +108,19 @@ async def human_gate_node(state: AgentState) -> AgentState:
             f"Timeout: 30 min."
         )
         sse_events.append("__human_action_required__")
+        push_sync(brief_id, sse_events[-2])
+        push_sync(brief_id, "__human_action_required__")
 
-        event = _ensure_event(brief_id)
-        event.clear()
+        lock = _ensure_lock(brief_id)
+        async with lock:
+            if brief_id in _decisions:
+                payload = _decisions.pop(brief_id)
+                _events.pop(brief_id, None)
+                return _payload_from_decision(state, payload, errors, sse_events)
 
-        _decisions.pop(brief_id, None)
+            event = _ensure_event(brief_id)
+            if not event.is_set():
+                event.clear()
 
         try:
             await asyncio.wait_for(event.wait(), timeout=_GATE_TIMEOUT_SECONDS)
@@ -90,27 +136,15 @@ async def human_gate_node(state: AgentState) -> AgentState:
                 "sse_events": sse_events,
             }
 
-        payload = _decisions.pop(brief_id, {})
-        human_decision = payload.get("human_decision", "rejected")
-        human_edits = payload.get("human_edits")
-        reviewed_by = payload.get("reviewed_by", "unknown")
-        reviewed_at = payload.get("reviewed_at", datetime.now(timezone.utc))
+        async with lock:
+            payload = _decisions.pop(brief_id, {})
+            _events.pop(brief_id, None)
 
-        _events.pop(brief_id, None)
+        if not payload:
+            sse_events.append("[HumanGate] Woke without decision payload — rejecting.")
+            payload = {"human_decision": "rejected", "human_edits": None, "reviewed_by": "system"}
 
-        sse_events.append(
-            f"[HumanGate] Decision received: {human_decision} by {reviewed_by}."
-        )
-
-        return {
-            **state,
-            "human_decision": human_decision,
-            "human_edits": human_edits,
-            "reviewed_by": reviewed_by,
-            "reviewed_at": reviewed_at,
-            "errors": errors,
-            "sse_events": sse_events,
-        }
+        return _payload_from_decision(state, payload, errors, sse_events)
 
     except Exception as exc:
         errors.append(f"HumanGate error: {exc}")

@@ -5,7 +5,9 @@ You are an expert LinkedIn content strategist for {{ brand }}.
 - **Target Persona**: {{ persona }} — {{ persona_description }}
 - **Key Message**: {{ key_message }}
 - **Tone**: {{ preferred_tone }}
-- **Character Limit**: {{ char_limit_linkedin }} characters total
+- **Character Limit**: {{ char_limit_linkedin }} characters total (target {{ min_chars }}–{{ max_chars }})
+
+{% include "_quality.j2" %}
 
 ## Persona Profile
 - Age Range: {{ age_range }}
@@ -45,13 +47,13 @@ Generate a LinkedIn post in the following JSON format ONLY. No markdown, no prea
 
 ```json
 {
-  "hook": "<attention-grabbing opening sentence, max 150 chars>",
+  "hook": "<attention-grabbing opening, 2–3 sentences, max 200 chars>",
   "bullets": [
-    "<key point 1>",
-    "<key point 2>",
-    "<key point 3>"
+    "<detailed key point 1 with benefit and persona relevance>",
+    "<detailed key point 2 with evidence or example>",
+    "<detailed key point 3 addressing a pain point>"
   ],
-  "cta": "<call-to-action sentence encouraging engagement, max 100 chars>",
+  "cta": "<engagement CTA, 1–2 sentences, max 120 chars>",
   "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3", "#hashtag4", "#hashtag5"]
 }
 ```

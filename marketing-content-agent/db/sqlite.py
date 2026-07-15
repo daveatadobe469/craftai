@@ -22,10 +22,11 @@ def _connect() -> sqlite3.Connection:
 
 
 def create_tables() -> None:
-    """Run the migration DDL if tables do not yet exist."""
+    """Run migrations and seed cluster personas (P01–P06)."""
     sql = _MIGRATION.read_text(encoding="utf-8")
     with _connect() as conn:
         conn.executescript(sql)
+    seed_cluster_personas()
 
 
 # ─── Briefs ───────────────────────────────────────────────────────────────────
@@ -108,6 +109,55 @@ def write_draft(
     return draft_id
 
 
+def update_latest_draft_decision(
+    brief_id: str,
+    human_decision: str,
+    human_edits: str | None,
+    reviewed_by: str,
+    reviewed_at: str,
+) -> bool:
+    """Persist human review on the latest draft row (before curator finishes)."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT draft_id FROM drafts
+            WHERE brief_id=?
+            ORDER BY revision_count DESC, created_at DESC
+            LIMIT 1
+            """,
+            (brief_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            """
+            UPDATE drafts
+            SET human_decision=?, human_edits=?, reviewed_by=?, reviewed_at=?
+            WHERE draft_id=?
+            """,
+            (human_decision, human_edits, reviewed_by, reviewed_at, row["draft_id"]),
+        )
+    return True
+
+
+def get_audit_event_data(brief_id: str, event_type: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT event_data FROM audit_log
+            WHERE brief_id=? AND event_type=?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (brief_id, event_type),
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row["event_data"]
+    if isinstance(raw, str):
+        return json.loads(raw or "{}")
+    return dict(raw or {})
+
+
 def get_latest_draft(brief_id: str) -> dict[str, Any] | None:
     sql = """
         SELECT * FROM drafts WHERE brief_id=?
@@ -141,16 +191,112 @@ def write_audit(
 
 # ─── Personas ─────────────────────────────────────────────────────────────────
 
+def _ensure_persona_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(personas)")}
+    if "persona_id" not in cols:
+        conn.execute("ALTER TABLE personas ADD COLUMN persona_id TEXT")
+    if "profile_json" not in cols:
+        conn.execute(
+            "ALTER TABLE personas ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}'"
+        )
+
+
+def _parse_persona_row(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d["interests"] = json.loads(d.get("interests") or "[]")
+    d["pain_points"] = json.loads(d.get("pain_points") or "[]")
+    raw_profile = d.get("profile_json")
+    if isinstance(raw_profile, str):
+        profile = json.loads(raw_profile or "{}")
+    elif isinstance(raw_profile, dict):
+        profile = raw_profile
+    else:
+        profile = {}
+    d["profile"] = profile
+    if profile:
+        cs = profile.get("content_strategy") or {}
+        d["recommended_angles"] = cs.get("recommended_angles") or d["interests"]
+        d["channel_playbook"] = cs.get("channel_playbook") or {}
+        d["language_guardrails"] = cs.get("language_guardrails") or {}
+        d["voice_attributes"] = cs.get("voice_attributes") or []
+    return d
+
+
+def upsert_persona(record: dict[str, Any]) -> None:
+    profile = record.get("profile_json") or {}
+    if not isinstance(profile, str):
+        profile_json = json.dumps(profile)
+    else:
+        profile_json = profile
+    sql = """
+        INSERT INTO personas
+            (name, description, age_range, income_bracket, interests, pain_points,
+             preferred_tone, char_limit_email, char_limit_social, char_limit_linkedin,
+             char_limit_ad, char_limit_blog, persona_id, profile_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            description=excluded.description,
+            age_range=excluded.age_range,
+            income_bracket=excluded.income_bracket,
+            interests=excluded.interests,
+            pain_points=excluded.pain_points,
+            preferred_tone=excluded.preferred_tone,
+            char_limit_email=excluded.char_limit_email,
+            char_limit_social=excluded.char_limit_social,
+            char_limit_linkedin=excluded.char_limit_linkedin,
+            char_limit_ad=excluded.char_limit_ad,
+            char_limit_blog=excluded.char_limit_blog,
+            persona_id=excluded.persona_id,
+            profile_json=excluded.profile_json
+    """
+    with _connect() as conn:
+        conn.execute(sql, (
+            record["name"],
+            record["description"],
+            record["age_range"],
+            record["income_bracket"],
+            json.dumps(record.get("interests") or []),
+            json.dumps(record.get("pain_points") or []),
+            record["preferred_tone"],
+            record["char_limit_email"],
+            record["char_limit_social"],
+            record["char_limit_linkedin"],
+            record["char_limit_ad"],
+            record["char_limit_blog"],
+            record.get("persona_id"),
+            profile_json,
+        ))
+
+
+def seed_cluster_personas() -> int:
+    """Load P01–P06 cluster personas from data/personas into SQLite."""
+    from db.persona_seed import load_persona_files, load_personas_all
+
+    with _connect() as conn:
+        _ensure_persona_columns(conn)
+
+    records = load_persona_files()
+    if len(records) < 6:
+        records = load_personas_all()
+    with _connect() as conn:
+        # Replace cluster personas on rename (upsert is keyed by name, not persona_id)
+        conn.execute(
+            "DELETE FROM personas WHERE persona_id IN ('P01','P02','P03','P04','P05','P06')"
+        )
+    for record in records:
+        upsert_persona(record)
+    # Remove legacy demo personas (pre-cluster seed names without persona_id)
+    with _connect() as conn:
+        conn.execute("DELETE FROM personas WHERE persona_id IS NULL OR persona_id = ''")
+    return len(records)
+
+
 def get_personas() -> list[dict[str, Any]]:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM personas").fetchall()
-    result = []
-    for row in rows:
-        d = dict(row)
-        d["interests"] = json.loads(d.get("interests") or "[]")
-        d["pain_points"] = json.loads(d.get("pain_points") or "[]")
-        result.append(d)
-    return result
+        rows = conn.execute(
+            "SELECT * FROM personas ORDER BY persona_id, name"
+        ).fetchall()
+    return [_parse_persona_row(row) for row in rows]
 
 
 def get_persona(name: str) -> dict[str, Any] | None:
@@ -158,7 +304,4 @@ def get_persona(name: str) -> dict[str, Any] | None:
         row = conn.execute("SELECT * FROM personas WHERE name=?", (name,)).fetchone()
     if row is None:
         return None
-    d = dict(row)
-    d["interests"] = json.loads(d.get("interests") or "[]")
-    d["pain_points"] = json.loads(d.get("pain_points") or "[]")
-    return d
+    return _parse_persona_row(row)

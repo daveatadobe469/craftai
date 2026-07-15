@@ -66,7 +66,6 @@ _GROQ_MODELS = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
     "gemma-7b-it",
-    "openai/gpt-oss-120b",
 ]
 
 _EMBEDDING_MODELS = [
@@ -191,32 +190,33 @@ async def get_ollama_models(base_url: str = "http://localhost:11434") -> OllamaM
     Query the local Ollama server for installed models.
     Returns the list with name, size, and family metadata.
     """
-    base_url = base_url.rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{base_url}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.ConnectError:
+    candidates = [base_url.rstrip("/")]
+    if "localhost" in candidates[0]:
+        candidates.append(candidates[0].replace("localhost", "127.0.0.1"))
+    elif "127.0.0.1" in candidates[0]:
+        candidates.append(candidates[0].replace("127.0.0.1", "localhost"))
+
+    last_error = ""
+    for url in dict.fromkeys(candidates):
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(f"{url}/api/tags")
+                resp.raise_for_status()
+                data = resp.json()
+            base_url = url
+            break
+        except httpx.ConnectError:
+            last_error = f"Cannot connect to Ollama at {url}. Is `ollama serve` running?"
+        except httpx.HTTPStatusError as exc:
+            last_error = f"Ollama API error at {url}: {exc.response.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    else:
         return OllamaModelsResponse(
             available=False,
-            base_url=base_url,
+            base_url=base_url.rstrip("/"),
             models=[],
-            error=f"Cannot connect to Ollama at {base_url}. Is `ollama serve` running?",
-        )
-    except httpx.HTTPStatusError as exc:
-        return OllamaModelsResponse(
-            available=False,
-            base_url=base_url,
-            models=[],
-            error=f"Ollama API error: {exc.response.status_code}",
-        )
-    except Exception as exc:
-        return OllamaModelsResponse(
-            available=False,
-            base_url=base_url,
-            models=[],
-            error=str(exc),
+            error=last_error,
         )
 
     raw_models = data.get("models", [])

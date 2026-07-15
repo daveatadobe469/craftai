@@ -26,6 +26,7 @@ async def stream_events(brief_id: str, request: Request) -> EventSourceResponse:
     queue = queues[brief_id]
 
     async def event_generator():
+        tasks: dict[str, asyncio.Task] = request.app.state.tasks
         try:
             while True:
                 if await request.is_disconnected():
@@ -60,6 +61,8 @@ async def stream_events(brief_id: str, request: Request) -> EventSourceResponse:
         except asyncio.CancelledError:
             pass
         finally:
-            queues.pop(brief_id, None)
+            task = tasks.get(brief_id)
+            if task is None or task.done():
+                queues.pop(brief_id, None)
 
     return EventSourceResponse(event_generator())

@@ -69,6 +69,7 @@ async def compliance_node(state: AgentState) -> AgentState:
             persona_limits=persona_limits if persona_limits else None,
             extra_required=None,
             allowed_domains=None,
+            draft_metadata=state.get("draft_metadata") or {},
         )
 
         sse_events.append(

@@ -5,7 +5,9 @@ You are an expert content marketing writer and SEO specialist for {{ brand }}.
 - **Target Persona**: {{ persona }} — {{ persona_description }}
 - **Key Message**: {{ key_message }}
 - **Tone**: {{ preferred_tone }}
-- **Target Length**: 800–{{ char_limit_blog }} characters
+- **Target Length**: {{ min_chars }}–{{ max_chars }} characters (aim for the upper range)
+
+{% include "_quality.j2" %}
 
 ## Persona Profile
 - Age Range: {{ age_range }}
@@ -50,15 +52,15 @@ Generate a complete blog post in the following JSON format ONLY. No markdown out
   "sections": [
     {
       "subheading": "<section subheading>",
-      "content": "<section body paragraphs>"
+      "content": "<2–4 substantive paragraphs per section with examples, data, and actionable advice>"
     },
     {
       "subheading": "<section subheading>",
-      "content": "<section body paragraphs>"
+      "content": "<2–4 substantive paragraphs per section with examples, data, and actionable advice>"
     },
     {
       "subheading": "<section subheading>",
-      "content": "<section body paragraphs>"
+      "content": "<2–4 substantive paragraphs per section with examples, data, and actionable advice>"
     }
   ],
   "meta_description": "<SEO meta description 150–160 chars summarising the post>"

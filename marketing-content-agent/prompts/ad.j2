@@ -6,8 +6,10 @@ You are an expert performance advertising copywriter for {{ brand }}.
 - **Key Message**: {{ key_message }}
 - **Tone**: {{ preferred_tone }}
 - **Headline Limit**: 30 characters
-- **Body Limit**: {{ char_limit_ad }} characters
+- **Body Limit**: {{ char_limit_ad }} characters (target {{ min_chars }}–{{ max_chars }} for body)
 - **CTA Limit**: 15 characters
+
+{% include "_quality.j2" %}
 
 ## Persona Profile
 - Age Range: {{ age_range }}
@@ -49,7 +51,7 @@ Generate ad copy in the following JSON format ONLY. No markdown, no preamble, no
 ```json
 {
   "headline": "<punchy headline max 30 chars — power word + benefit>",
-  "body": "<compelling body copy max {{ char_limit_ad }} chars — address pain point and offer solution>",
+  "body": "<compelling body: {{ min_chars }}–{{ max_chars }} chars — pain point, solution, proof point, urgency>",
   "cta": "<action-oriented CTA max 15 chars>"
 }
 ```

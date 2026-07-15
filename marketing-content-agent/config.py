@@ -86,6 +86,7 @@ def get_llm(temperature: float = 0.7):
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
             temperature=temperature,
+            max_tokens=4096,
         )
 
     if settings.LLM_PROVIDER == "ollama":
@@ -95,6 +96,7 @@ def get_llm(temperature: float = 0.7):
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
             temperature=temperature,
+            num_predict=4096,
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Use 'groq' or 'ollama'.")

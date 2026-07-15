@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -11,6 +9,7 @@ import mlflow
 from jinja2 import Environment, FileSystemLoader
 
 from config import get_llm, settings
+from graph.draft_parser import parse_and_format_draft
 from graph.state import AgentState
 from rag import chroma_client as cc
 from rag import embedder, evaluator
@@ -20,31 +19,30 @@ _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 _jinja_env = Environment(loader=FileSystemLoader(str(_PROMPTS_DIR)), autoescape=False)
 
 
-def _parse_draft_json(raw: str) -> tuple[str, dict[str, Any]]:
-    """
-    Extract the JSON block from the LLM response.
-    Returns (draft_text, metadata_dict).
-    """
-    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if fence_match:
-        raw_json = fence_match.group(1)
-    else:
-        brace_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        raw_json = brace_match.group(0) if brace_match else raw
+def _min_chars_for_channel(channel: str, char_limit: int) -> int:
+    """Minimum target length so small models do not stop at one short sentence."""
+    ch = channel.lower()
+    if ch == "blog":
+        return max(800, int(char_limit * 0.45))
+    if ch == "social":
+        return max(180, int(char_limit * 0.70))
+    if ch == "ad":
+        return max(90, int(char_limit * 0.75))
+    if ch == "linkedin":
+        return max(400, int(char_limit * 0.65))
+    return max(280, int(char_limit * 0.65))
 
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return raw.strip(), {}
 
-    body_keys = ["body", "copy", "content"]
-    for key in body_keys:
-        if key in data:
-            draft_text = str(data[key])
-            return draft_text, data
-
-    draft_text = json.dumps(data, indent=2)
-    return draft_text, data
+def _char_limit_for_channel(channel: str, persona_profile: dict[str, Any]) -> int:
+    key = f"char_limit_{channel.lower()}"
+    defaults = {
+        "char_limit_email": 750,
+        "char_limit_social": 280,
+        "char_limit_linkedin": 1200,
+        "char_limit_ad": 200,
+        "char_limit_blog": 3500,
+    }
+    return int(persona_profile.get(key) or defaults.get(key, 750))
 
 
 async def generator_node(state: AgentState) -> AgentState:
@@ -117,8 +115,12 @@ async def generator_node(state: AgentState) -> AgentState:
             f"{len(guidelines)} guidelines, {len(social_content)} social examples."
         )
 
+        char_limit = _char_limit_for_channel(channel, persona_profile)
+        min_chars = _min_chars_for_channel(channel, char_limit)
+
         template = _jinja_env.get_template(f"{channel}.j2")
         prompt_text = template.render(
+            channel=channel,
             brand=brand,
             persona=persona_name,
             persona_description=persona_profile.get("description", ""),
@@ -128,11 +130,13 @@ async def generator_node(state: AgentState) -> AgentState:
             income_bracket=persona_profile.get("income_bracket", "middle"),
             interests=persona_profile.get("interests", []),
             pain_points=persona_profile.get("pain_points", []),
-            char_limit_email=persona_profile.get("char_limit_email", 500),
+            char_limit_email=persona_profile.get("char_limit_email", 750),
             char_limit_social=persona_profile.get("char_limit_social", 280),
-            char_limit_linkedin=persona_profile.get("char_limit_linkedin", 700),
-            char_limit_ad=persona_profile.get("char_limit_ad", 150),
-            char_limit_blog=persona_profile.get("char_limit_blog", 2000),
+            char_limit_linkedin=persona_profile.get("char_limit_linkedin", 1200),
+            char_limit_ad=persona_profile.get("char_limit_ad", 200),
+            char_limit_blog=persona_profile.get("char_limit_blog", 3500),
+            min_chars=min_chars,
+            max_chars=char_limit,
             guidelines=guidelines,
             campaigns=campaigns,
             social_content=social_content,
@@ -145,7 +149,9 @@ async def generator_node(state: AgentState) -> AgentState:
         response = await loop.run_in_executor(None, llm.invoke, prompt_text)
         generation_ms = int((time.monotonic() - t0) * 1000)
 
-        draft_text, draft_metadata = _parse_draft_json(response.content)
+        draft_text, draft_metadata = parse_and_format_draft(
+            response.content, channel, char_limit
+        )
         draft_metadata["channel"] = channel
         draft_metadata["brand"] = brand
         draft_metadata["persona"] = persona_name

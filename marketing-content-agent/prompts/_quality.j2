@@ -1,0 +1,19 @@
+## Quality Requirements (IMPORTANT)
+- Write **rich, descriptive copy** — not a one-liner or bare minimum.
+{% if channel == "email" %}
+- Persona limit **{{ max_chars }} chars applies to the `body` field only** — subject (≤60) and CTA (≤30) are separate.
+{% elif channel == "linkedin" %}
+- Persona limit **{{ max_chars }} chars applies to hook + bullets + cta combined** — hashtags are separate.
+{% elif channel == "social" %}
+- Persona limit **{{ max_chars }} chars applies to the `copy` field only** — hashtags are separate.
+{% elif channel == "ad" %}
+- Persona limit **{{ max_chars }} chars applies to the `body` field only** — headline (≤30) and CTA (≤15) are separate.
+{% elif channel == "blog" %}
+- Persona limit **{{ max_chars }} chars applies to title + all section text + meta description combined**.
+{% endif %}
+- Target **{{ min_chars }}–{{ max_chars }} characters** for the limit-relevant content (use most of the allowed range).
+- **STRICT:** limit-relevant content must NOT exceed **{{ max_chars }}** characters — count carefully before responding.
+- Return **only** the JSON object. No markdown ``` fences. No commentary or checklist after the JSON.
+- Include: a strong opening hook, 2–3 concrete benefits tied to the persona's pain points, specific product/value details, and a clear call-to-action.
+- Reference the key message explicitly and expand it with supporting detail from the brief and retrieved examples.
+- Use full sentences and natural paragraph flow; avoid telegraphic or bullet-only output unless the channel format requires bullets (e.g. LinkedIn).

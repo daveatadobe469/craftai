@@ -4,6 +4,26 @@ import httpx
 import pandas as pd
 import streamlit as st
 
+from ui.components.progress import inject_progress_css, run_with_progress, show_ring
+
+
+def _id_column_config() -> dict:
+    """Wide monospace columns so UUIDs display and export in full."""
+    return {
+        "Brief ID": st.column_config.TextColumn("Brief ID", width="large"),
+        "Draft ID": st.column_config.TextColumn("Draft ID", width="large"),
+    }
+
+
+def _download_csv(df: pd.DataFrame, filename: str, label: str) -> None:
+    st.download_button(
+        label=label,
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=False,
+    )
+
 
 def _get(api_base: str, path: str, params: dict | None = None) -> dict | list | None:
     try:
@@ -17,12 +37,17 @@ def _get(api_base: str, path: str, params: dict | None = None) -> dict | list | 
 
 
 def render() -> None:
+    inject_progress_css()
     st.markdown('<div style="color:#64748b;font-size:0.88rem;margin-bottom:16px;">Full traceability of every brief, draft, compliance check, and human decision.</div>', unsafe_allow_html=True)
 
     api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
 
-    # ── Check API reachability ────────────────────────────────────────────────
-    stats = _get(api_base, "/audit/stats")
+    stats = run_with_progress(
+        "Loading audit dashboard…",
+        lambda: _get(api_base, "/audit/stats"),
+        estimated_seconds=3,
+        sublabel="Fetching pipeline statistics",
+    )
     if stats is None:
         st.error("Cannot reach API. Make sure the backend is running.")
         return
@@ -85,7 +110,11 @@ def render() -> None:
         if channel_filter:
             params["channel"] = channel_filter
 
-        briefs = _get(api_base, "/audit/briefs", params)
+        briefs = run_with_progress(
+            "Loading briefs…",
+            lambda: _get(api_base, "/audit/briefs", params) or [],
+            estimated_seconds=4,
+        )
         if not briefs:
             st.info("No briefs found. Submit a campaign brief from the **Create Content** tab.")
         else:
@@ -95,16 +124,22 @@ def render() -> None:
                 "persona": "Persona", "key_message": "Key Message",
                 "status": "Status", "created_at": "Created",
             })
-            df["Brief ID"] = df["Brief ID"].str[:8] + "…"
 
             _status_colour = {
                 "pending": "🟡", "processing": "🔵",
                 "complete": "🟢", "rejected": "🔴",
+                "awaiting_review": "🟠",
             }
             df["Status"] = df["Status"].apply(lambda s: f"{_status_colour.get(s, '⚪')} {s}")
 
-            st.dataframe(df[["Brief ID", "Brand", "Channel", "Persona", "Status", "Created", "Key Message"]],
-                         use_container_width=True, hide_index=True)
+            display_cols = ["Brief ID", "Brand", "Channel", "Persona", "Status", "Created", "Key Message"]
+            _download_csv(df[display_cols], "craftai_briefs.csv", "⬇️ Download briefs (CSV)")
+            st.dataframe(
+                df[display_cols],
+                column_config=_id_column_config(),
+                use_container_width=True,
+                hide_index=True,
+            )
             st.caption(f"{len(briefs)} brief(s) shown")
 
     # ────────────────────────────────────────────────────────────────────────
@@ -133,13 +168,15 @@ def render() -> None:
         if brief_id_filter.strip():
             d_params["brief_id"] = brief_id_filter.strip()
 
-        drafts = _get(api_base, "/audit/drafts", d_params)
+        drafts = run_with_progress(
+            "Loading drafts…",
+            lambda: _get(api_base, "/audit/drafts", d_params) or [],
+            estimated_seconds=4,
+        )
         if not drafts:
             st.info("No drafts found yet.")
         else:
             df_d = pd.DataFrame(drafts)
-            df_d["draft_id"] = df_d["draft_id"].str[:8] + "…"
-            df_d["brief_id"] = df_d["brief_id"].str[:8] + "…"
             df_d["compliance_pass"] = df_d["compliance_pass"].apply(lambda v: "✅" if v else "❌")
             df_d["judge_score"] = df_d["judge_score"].apply(
                 lambda v: f"{v:.2f}" if v is not None else "—"
@@ -156,10 +193,16 @@ def render() -> None:
                 "compliance_pass": "Compliant", "human_decision": "Decision",
                 "reviewed_by": "Reviewer", "created_at": "Created",
             })
+            display_cols = [
+                "Draft ID", "Brief ID", "Revisions", "Judge Score",
+                "Compliant", "Decision", "Reviewer", "Created",
+            ]
+            _download_csv(df_d[display_cols], "craftai_drafts.csv", "⬇️ Download drafts (CSV)")
             st.dataframe(
-                df_d[["Draft ID", "Brief ID", "Revisions", "Judge Score",
-                      "Compliant", "Decision", "Reviewer", "Created"]],
-                use_container_width=True, hide_index=True,
+                df_d[display_cols],
+                column_config=_id_column_config(),
+                use_container_width=True,
+                hide_index=True,
             )
             st.caption(f"{len(drafts)} draft(s) shown")
 
@@ -205,7 +248,11 @@ def render() -> None:
         if evt_actor:
             evt_params["actor"] = evt_actor
 
-        result = _get(api_base, "/audit/events", evt_params)
+        result = run_with_progress(
+            "Loading audit events…",
+            lambda: _get(api_base, "/audit/events", evt_params),
+            estimated_seconds=5,
+        )
         if result is None:
             st.error("Failed to load audit events.")
         else:
@@ -222,13 +269,22 @@ def render() -> None:
                     rows.append({
                         "ID": e["id"],
                         "Timestamp": e["ts"],
-                        "Brief ID": e["brief_id"][:8] + "…",
+                        "Brief ID": e["brief_id"],
                         "Event Type": e["event_type"],
                         "Actor": e["actor"],
-                        "Data": data_str[:120] + ("…" if len(data_str) > 120 else ""),
+                        "Data": data_str,
                     })
                 df_e = pd.DataFrame(rows)
-                st.dataframe(df_e, use_container_width=True, hide_index=True)
+                _download_csv(df_e, "craftai_audit_events.csv", "⬇️ Download events (CSV)")
+                st.dataframe(
+                    df_e,
+                    column_config={
+                        **_id_column_config(),
+                        "Data": st.column_config.TextColumn("Data", width="large"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
                 st.caption(f"Showing {len(events)} of {total} total event(s)")
 
                 with st.expander("Expand an event to see full data"):

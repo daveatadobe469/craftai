@@ -53,11 +53,11 @@ async def orchestrator_node(state: AgentState) -> AgentState:
                 "interests": [],
                 "pain_points": [],
                 "preferred_tone": "professional",
-                "char_limit_email": 500,
+                "char_limit_email": 750,
                 "char_limit_social": 280,
-                "char_limit_linkedin": 700,
-                "char_limit_ad": 150,
-                "char_limit_blog": 2000,
+                "char_limit_linkedin": 1200,
+                "char_limit_ad": 200,
+                "char_limit_blog": 3500,
             }
 
         constraints = dict(state.get("constraints") or {})
