@@ -97,24 +97,30 @@ def render() -> None:
 
     st.divider()
 
+    status = str(data.get("status", "")).lower()
+    can_review = (not human_decision) and bool(draft) and status == "awaiting_review"
+
     col_a, col_b = st.columns([2, 1])
 
     with col_a:
         st.markdown("### Brief Content")
         if human_decision:
             st.caption(f"Decision already taken: **{human_decision.upper()}**")
+        elif can_review:
+            st.caption("Awaiting your review — edit the draft if needed, then choose an action below.")
         elif draft:
-            st.caption("Draft generated — approval is handled on the **Create Brief** tab.")
+            st.caption("Draft generated.")
         if draft:
-            st.text_area(
-                "Brief content (read-only)",
+            edited_draft = st.text_area(
+                "Brief content",
                 value=draft,
                 height=350,
                 key=f"brief_view_{brief_id}",
-                disabled=True,
+                disabled=not can_review,
                 label_visibility="collapsed",
             )
         else:
+            edited_draft = ""
             st.info("No brief content available yet. The pipeline may still be running.")
 
     with col_b:
@@ -133,3 +139,56 @@ def render() -> None:
             st.markdown("**RAGAS Scores:**")
             for metric, score in ragas_scores.items():
                 st.progress(float(score), text=f"{metric.replace('_', ' ').title()}: {score:.2f}")
+
+    # ── Human review decision (recovery path if you left the Create Brief tab) ──
+    if can_review:
+        st.divider()
+        st.markdown("### 🗳️ Submit Your Decision")
+        with st.form(f"review_decision_{brief_id}", clear_on_submit=False):
+            reviewer = st.text_input("Your Name / Email", value="reviewer@brand.com")
+            b1, b2, b3 = st.columns(3)
+            approve = b1.form_submit_button("✅ Approve", type="primary", use_container_width=True)
+            approve_edit = b2.form_submit_button("✏️ Approve with Edits", use_container_width=True)
+            reject = b3.form_submit_button("❌ Reject", use_container_width=True)
+
+        if approve:
+            _submit_decision(api_base, brief_id, "approved", None, reviewer)
+        elif approve_edit:
+            if edited_draft.strip() == draft.strip():
+                st.warning("No edits detected — use Approve instead.")
+            else:
+                _submit_decision(api_base, brief_id, "edited", edited_draft.strip(), reviewer)
+        elif reject:
+            _submit_decision(api_base, brief_id, "rejected", None, reviewer)
+    elif not human_decision and draft and status != "awaiting_review":
+        st.divider()
+        st.info(
+            f"This brief is in **{status or 'unknown'}** state — not awaiting review, "
+            "so no decision can be submitted here."
+        )
+
+
+def _submit_decision(
+    api_base: str, brief_id: str, decision: str, edits: str | None, reviewer: str
+) -> None:
+    payload: dict = {"decision": decision, "reviewer": reviewer}
+    if edits:
+        payload["edits"] = edits
+    try:
+        r = httpx.post(f"{api_base}/decision/{brief_id}", json=payload, timeout=15.0)
+        r.raise_for_status()
+        if decision == "rejected":
+            st.error(f"Brief rejected. Reviewer: {reviewer}")
+        else:
+            st.success(
+                f"Decision **{decision}** submitted — the pipeline is resuming and the "
+                "Curator will index the content. Reload the brief to see status **complete**."
+            )
+        # Clear cached decision state and refresh the view.
+        st.session_state.pop("review_brief_id", None)
+        st.session_state["review_brief_id"] = brief_id
+        st.rerun()
+    except httpx.HTTPStatusError as exc:
+        st.error(f"API error {exc.response.status_code}: {exc.response.text}")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Decision submission failed: {exc}")

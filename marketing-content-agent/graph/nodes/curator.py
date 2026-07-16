@@ -127,7 +127,7 @@ async def curator_node(state: AgentState) -> AgentState:
             None,
             update_brief_status,
             brief_id,
-            "indexed",
+            "complete",
         )
 
         try:
