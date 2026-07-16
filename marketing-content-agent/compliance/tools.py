@@ -220,7 +220,7 @@ _URL_PATTERN = re.compile(
 )
 
 _SUSPICIOUS_URL_PATTERN = re.compile(
-    r"https?://(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly)/\S+",
+    r"https?://(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly)\b",
     re.IGNORECASE,
 )
 
