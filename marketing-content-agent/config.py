@@ -42,6 +42,36 @@ class Settings(BaseSettings):
     JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
     CRAG_THRESHOLD: float = Field(default=0.5, ge=0.0, le=1.0)
     MAX_REVISIONS: int = Field(default=3, ge=1, le=10)
+    # RAGAS is the heaviest token consumer (~4 LLM calls per evaluation). It now
+    # runs ONCE on the final draft that reaches the human gate, not per revision.
+    # Set false to skip it entirely (demos / tight API quota).
+    RAGAS_ENABLED: bool = True
+
+    # ── [image-based-campaign] Image feature (input vision + output generation) ─
+    # Master feature flag — when False the pipeline behaves exactly as before:
+    # the vision + art-director nodes become runtime no-ops (graph is unchanged).
+    IMAGE_FEATURE_ENABLED: bool = False
+    # Image OUTPUT (text → image). Cloudflare Workers AI by default (free tier);
+    # switch IMAGE_PROVIDER to "gemini" for legible in-image text at demo quality.
+    IMAGE_PROVIDER: str = "cloudflare"
+    IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    # Gemini image generation (Interactions API) — renders headline text properly.
+    GEMINI_API_KEY: str = ""
+    GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image"
+    IMAGE_ASPECT_RATIO: str = "1:1"
+    IMAGE_SIZE: str = "1K"
+    # Image INPUT (image → text). Groq vision model, reuses the Groq key.
+    VISION_PROVIDER: str = "groq"
+    VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    # Image storage backend: "local" (disk, served via /media) or "firebase".
+    IMAGE_STORAGE_BACKEND: str = "local"
+    MEDIA_BASE_URL: str = "http://localhost:8000"
+    # Firebase Storage (used only when IMAGE_STORAGE_BACKEND=firebase).
+    FIREBASE_CREDENTIALS_PATH: str = ""      # path to the service-account JSON
+    FIREBASE_STORAGE_BUCKET: str = ""        # e.g. my-project.appspot.com
+    FIREBASE_SIGNED_URL_TTL_DAYS: int = 7    # render URL lifetime for the UI
 
     # ── Server ports ──────────────────────────────────────────────────────────
     API_PORT: int = 8000
@@ -61,7 +91,16 @@ class Settings(BaseSettings):
             os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         elif not mlflow_uri.startswith(("http://", "https://")):
             os.makedirs(mlflow_uri, exist_ok=True)
+        # [image-based-campaign] Ensure local image dirs exist (generated + uploads).
+        data_root = os.path.dirname(self.SQLITE_DB_PATH) or "."
+        os.makedirs(os.path.join(data_root, "images"), exist_ok=True)
+        os.makedirs(os.path.join(data_root, "uploads"), exist_ok=True)
         return self
+
+    @property
+    def data_root(self) -> str:
+        # [image-based-campaign] Root dir that holds images/ and uploads/.
+        return os.path.dirname(self.SQLITE_DB_PATH) or "."
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -123,4 +162,23 @@ def get_judge_llm(temperature: float = 0.1):
         model=judge_model,
         temperature=temperature,
         max_tokens=4096,
+    )
+
+
+# [image-based-campaign] Vision LLM factory (image → text description).
+def get_vision_llm(temperature: float = 0.2):
+    """Return a vision-capable chat model for describing an uploaded image.
+    Groq only for now; reuses the Groq API key."""
+    if settings.VISION_PROVIDER != "groq":
+        raise ValueError(f"Unsupported VISION_PROVIDER: {settings.VISION_PROVIDER!r}.")
+    if not settings.GROQ_API_KEY:
+        raise ValueError("Vision model needs GROQ_API_KEY.")
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        api_key=settings.GROQ_API_KEY,
+        model=settings.VISION_MODEL,
+        temperature=temperature,
+        max_tokens=1024,
     )

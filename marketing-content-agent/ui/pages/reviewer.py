@@ -123,6 +123,12 @@ def render() -> None:
             edited_draft = ""
             st.info("No brief content available yet. The pipeline may still be running.")
 
+        # [image-based-campaign] Show the generated campaign image if present.
+        image_url = (data.get("draft_metadata") or {}).get("image_url")
+        if image_url:
+            st.markdown("#### 🖼️ Generated Image")
+            st.image(image_url, use_container_width=True)
+
     with col_b:
         st.markdown("### Compliance Summary")
         st.markdown(f"**Rule Check:** {_compliance_badge(compliance_pass)}")

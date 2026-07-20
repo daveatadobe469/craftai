@@ -46,7 +46,7 @@ async def score_draft(
     brand: str,
     guidelines_context: str,
     llm: BaseChatModel,
-) -> tuple[float, str]:
+) -> tuple[float | None, str]:
     """
     LLM-as-judge compliance scorer.
 
@@ -58,8 +58,11 @@ async def score_draft(
         llm: A LangChain chat model instance.
 
     Returns:
-        Tuple of (score: float, evidence: str).
-        Returns (0.0, "parse error") on any failure.
+        Tuple of (score: float | None, evidence: str).
+        Score is None when the judge could NOT be evaluated (API/rate-limit/parse
+        failure). Callers must treat None as "unknown", never as 0.0 — a 429 is
+        not the same as non-compliant content, and scoring it 0.0 used to trigger
+        pointless revisions that burned more quota.
     """
     import asyncio
 
@@ -93,6 +96,8 @@ async def score_draft(
         return score, evidence
 
     except json.JSONDecodeError:
-        return 0.0, "parse error"
+        # Judge responded but unparseably — unknown, not "bad content".
+        return None, "judge unavailable: could not parse judge response"
     except Exception as exc:
-        return 0.0, f"judge error: {exc}"
+        # API error / rate limit / timeout — unknown, not "bad content".
+        return None, f"judge unavailable: {exc}"

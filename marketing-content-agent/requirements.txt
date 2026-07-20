@@ -33,6 +33,10 @@ mlflow>=2.13.0
 # UI
 streamlit>=1.35.0
 
+# [image-based-campaign] Firebase Storage backend (optional — only needed when
+# IMAGE_STORAGE_BACKEND=firebase; local disk backend needs nothing extra).
+firebase-admin>=6.5.0
+
 # Templating
 jinja2>=3.1.4
 

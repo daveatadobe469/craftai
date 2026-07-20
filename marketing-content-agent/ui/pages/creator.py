@@ -35,6 +35,16 @@ def _persona_display_label(persona: dict) -> str:
     return (persona.get("name") or "Unknown persona").strip()
 
 
+def _image_feature_enabled(api_base: str) -> bool:
+    # [image-based-campaign] Ask the API whether the image feature is on.
+    try:
+        r = httpx.get(f"{api_base}/config/features", timeout=5.0)
+        r.raise_for_status()
+        return bool(r.json().get("image_feature_enabled"))
+    except Exception:
+        return False
+
+
 def _fetch_persona_options(api_base: str) -> tuple[list[str], dict[str, str]]:
     """Return persona names and name→display labels from the API."""
     displays: dict[str, str] = {}
@@ -321,6 +331,16 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
             label_visibility="collapsed",
         )
 
+        # [image-based-campaign] Show the generated campaign image if present.
+        image_url = (draft_data.get("draft_metadata") or {}).get("image_url")
+        if image_url:
+            st.markdown(
+                '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
+                'text-transform:uppercase;margin:12px 0 8px 0;">🖼️ Generated Image</div>',
+                unsafe_allow_html=True,
+            )
+            st.image(image_url, use_container_width=True)
+
     with right_col:
         # ── Compliance summary ─────────────────────────────────────────────────
         st.markdown(
@@ -595,6 +615,7 @@ def render() -> None:
 
     api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
     persona_names, persona_displays = _fetch_persona_options(api_base)
+    image_enabled = _image_feature_enabled(api_base)  # [image-based-campaign]
 
     with st.form("brief_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
@@ -629,6 +650,14 @@ def render() -> None:
             height=52,
             help='e.g. {"required_phrases": ["shop now"]}',
         )
+        # [image-based-campaign] Optional reference image → campaign (image → text).
+        uploaded_image = None
+        if image_enabled:
+            uploaded_image = st.file_uploader(
+                "Reference Image (optional) — the AI will read it and ground the campaign in it",
+                type=["png", "jpg", "jpeg", "webp"],
+            )
+            st.caption("🖼️ Image feature ON — a campaign image is also generated after review.")
         submitted = st.form_submit_button(
             "🚀 Submit Brief & Run Pipeline",
             use_container_width=True,
@@ -642,7 +671,9 @@ def render() -> None:
     if not brand.strip():
         st.error("Brand name is required.")
         return
-    if not key_message.strip() or len(key_message.strip()) < 10:
+    # [image-based-campaign] With a reference image, key message may be derived by vision.
+    has_image = image_enabled and uploaded_image is not None
+    if not has_image and (not key_message.strip() or len(key_message.strip()) < 10):
         st.error("Key message must be at least 10 characters.")
         return
     try:
@@ -659,13 +690,24 @@ def render() -> None:
         "constraints": constraints_dict,
     }
 
+    # [image-based-campaign] Multipart submit when a reference image was uploaded,
+    # otherwise the original JSON brief endpoint.
+    def _submit_brief():
+        if has_image:
+            files = {"image": (uploaded_image.name, uploaded_image.getvalue(), uploaded_image.type)}
+            form = {
+                "brand": payload["brand"], "channel": payload["channel"],
+                "persona": payload["persona"], "key_message": payload["key_message"],
+                "constraints": json.dumps(constraints_dict),
+            }
+            resp = httpx.post(f"{api_base}/brief/image", data=form, files=files, timeout=30.0)
+        else:
+            resp = httpx.post(f"{api_base}/brief", json=payload, timeout=20.0)
+        resp.raise_for_status()
+        return resp.json()
+
     # ── Submit brief to API ───────────────────────────────────────────────────
     try:
-        def _submit_brief():
-            resp = httpx.post(f"{api_base}/brief", json=payload, timeout=20.0)
-            resp.raise_for_status()
-            return resp.json()
-
         data = run_with_progress(
             "Submitting brief…",
             _submit_brief,
