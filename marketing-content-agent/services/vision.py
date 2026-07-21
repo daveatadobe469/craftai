@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import base64
+import re
 
 from langchain_core.messages import HumanMessage
 
 from config import get_vision_llm
+
+
+def strip_think(text: str) -> str:
+    """[image-based-campaign] The Groq vision model reasons out loud first. Drop the
+    <think>…</think> block so callers get the answer, not the model's scratchpad.
+    An unterminated block means the reply was truncated mid-reasoning."""
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
+    return re.sub(r"<think>.*\Z", "", text, flags=re.DOTALL).strip()
 
 _DESCRIBE_PROMPT = (
     "You are a marketing creative analyst. Describe this image for a campaign brief. "
@@ -28,4 +37,4 @@ def describe_image(image_bytes: bytes, mime: str = "image/png") -> str:
         {"type": "image_url", "image_url": {"url": _data_url(image_bytes, mime)}},
     ])
     resp = llm.invoke([message])
-    return (resp.content or "").strip()
+    return strip_think(resp.content)

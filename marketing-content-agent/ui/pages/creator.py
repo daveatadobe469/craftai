@@ -8,6 +8,7 @@ from typing import Literal
 import httpx
 import streamlit as st
 
+from ui.components.image_review import render_generated_image  # [image-based-campaign]
 from ui.components.progress import (
     inject_progress_css,
     run_with_progress,
@@ -331,15 +332,8 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
             label_visibility="collapsed",
         )
 
-        # [image-based-campaign] Show the generated campaign image if present.
-        image_url = (draft_data.get("draft_metadata") or {}).get("image_url")
-        if image_url:
-            st.markdown(
-                '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
-                'text-transform:uppercase;margin:12px 0 8px 0;">🖼️ Generated Image</div>',
-                unsafe_allow_html=True,
-            )
-            st.image(image_url, use_container_width=True)
+        # [image-based-campaign] Generated image + its compliance verdict.
+        render_generated_image(draft_data.get("draft_metadata"))
 
     with right_col:
         # ── Compliance summary ─────────────────────────────────────────────────

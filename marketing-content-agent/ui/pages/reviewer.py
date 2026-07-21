@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
+from ui.components.image_review import render_generated_image  # [image-based-campaign]
 from ui.components.progress import inject_progress_css, run_with_progress
 
 
@@ -123,11 +124,8 @@ def render() -> None:
             edited_draft = ""
             st.info("No brief content available yet. The pipeline may still be running.")
 
-        # [image-based-campaign] Show the generated campaign image if present.
-        image_url = (data.get("draft_metadata") or {}).get("image_url")
-        if image_url:
-            st.markdown("#### 🖼️ Generated Image")
-            st.image(image_url, use_container_width=True)
+        # [image-based-campaign] Generated image + its compliance verdict.
+        render_generated_image(data.get("draft_metadata"))
 
     with col_b:
         st.markdown("### Compliance Summary")

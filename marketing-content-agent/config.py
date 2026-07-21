@@ -64,7 +64,14 @@ class Settings(BaseSettings):
     IMAGE_SIZE: str = "1K"
     # Image INPUT (image → text). Groq vision model, reuses the Groq key.
     VISION_PROVIDER: str = "groq"
-    VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    VISION_MODEL: str = "qwen/qwen3.6-27b"   # only vision-capable model on Groq
+    # Image COMPLIANCE JUDGE — a different vendor from IMAGE_PROVIDER so the model
+    # that generated the image never grades its own output.
+    # OFF by default: Groq's free-tier 8k TPM ceiling can't fit image + reasoning +
+    # JSON answer reliably, so generated images are human-reviewed only.
+    IMAGE_JUDGE_ENABLED: bool = False
+    IMAGE_JUDGE_PROVIDER: str = "groq"
+    IMAGE_JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
     # Image storage backend: "local" (disk, served via /media) or "firebase".
     IMAGE_STORAGE_BACKEND: str = "local"
     MEDIA_BASE_URL: str = "http://localhost:8000"
@@ -165,10 +172,12 @@ def get_judge_llm(temperature: float = 0.1):
     )
 
 
-# [image-based-campaign] Vision LLM factory (image → text description).
-def get_vision_llm(temperature: float = 0.2):
-    """Return a vision-capable chat model for describing an uploaded image.
-    Groq only for now; reuses the Groq API key."""
+# [image-based-campaign] Vision LLM factory (image → text description / judging).
+# NOTE: the Groq vision model is a *reasoning* model — it spends tokens on an
+# internal <think> block before answering, so max_tokens must be generous or the
+# reply is truncated before any real output. json_mode forces a parseable object.
+def get_vision_llm(temperature: float = 0.2, max_tokens: int = 2048, json_mode: bool = False):
+    """Return a vision-capable chat model. Groq only; reuses the Groq API key."""
     if settings.VISION_PROVIDER != "groq":
         raise ValueError(f"Unsupported VISION_PROVIDER: {settings.VISION_PROVIDER!r}.")
     if not settings.GROQ_API_KEY:
@@ -176,9 +185,14 @@ def get_vision_llm(temperature: float = 0.2):
 
     from langchain_groq import ChatGroq
 
+    kwargs: dict = {}
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
     return ChatGroq(
         api_key=settings.GROQ_API_KEY,
         model=settings.VISION_MODEL,
         temperature=temperature,
-        max_tokens=1024,
+        max_tokens=max_tokens,
+        model_kwargs=kwargs,
     )

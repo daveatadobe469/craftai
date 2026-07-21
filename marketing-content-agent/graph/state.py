@@ -26,6 +26,10 @@ class AgentState(TypedDict, total=False):
     image_prompt: Optional[str]
     image_path: Optional[str]
     image_url: Optional[str]
+    # Cross-vendor image compliance judge. Score is None when it could not run.
+    image_judge_score: Optional[float]
+    image_judge_evidence: Optional[str]
+    image_judge_issues: list[str]
 
     # ── Generation ────────────────────────────────────────────────────────────
     draft: str
