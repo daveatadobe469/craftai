@@ -72,13 +72,16 @@ class Settings(BaseSettings):
     IMAGE_JUDGE_ENABLED: bool = False
     IMAGE_JUDGE_PROVIDER: str = "groq"
     IMAGE_JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
-    # Image storage backend: "local" (disk, served via /media) or "firebase".
+    # Image storage backend: "local" (disk, served via the API's /media mount) or
+    # "cloudinary" (CDN-backed, permanent public URLs — needed for a deployed UI).
     IMAGE_STORAGE_BACKEND: str = "local"
     MEDIA_BASE_URL: str = "http://localhost:8000"
-    # Firebase Storage (used only when IMAGE_STORAGE_BACKEND=firebase).
-    FIREBASE_CREDENTIALS_PATH: str = ""      # path to the service-account JSON
-    FIREBASE_STORAGE_BUCKET: str = ""        # e.g. my-project.appspot.com
-    FIREBASE_SIGNED_URL_TTL_DAYS: int = 7    # render URL lifetime for the UI
+    # Cloudinary (only when IMAGE_STORAGE_BACKEND=cloudinary). Uploaded images get
+    # a permanent, publicly-readable CDN URL — no signed-URL expiry to manage.
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+    CLOUDINARY_FOLDER: str = "craftai"
 
     # ── Server ports ──────────────────────────────────────────────────────────
     API_PORT: int = 8000

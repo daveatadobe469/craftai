@@ -1,12 +1,18 @@
 # [image-based-campaign] Image storage: save bytes to a backend, return a reference.
-# Two backends behind one save() contract, chosen by IMAGE_STORAGE_BACKEND:
-#   "local"    — disk under data/, served via the API's /media mount (dev default)
-#   "firebase" — Firebase Storage bucket, returns a signed URL for the UI
+# Backends sit behind one save() contract, chosen by IMAGE_STORAGE_BACKEND:
+#   "local"      — disk under data/, served via the API's /media mount
+#   "cloudinary" — CDN-backed, permanent public URLs (works from a deployed UI)
+# Adding another store is a class with the same save() signature plus a branch in
+# get_image_store(); nothing else in the codebase changes.
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 import uuid
 from dataclasses import dataclass
+
+import httpx
 
 from config import settings
 
@@ -16,7 +22,7 @@ _MIME = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 @dataclass
 class ImageRef:
     """Pointer to a stored image — never the raw bytes."""
-    path: str  # durable locator: filesystem path (local) or gs:// URI (firebase)
+    path: str  # durable locator (filesystem path for the local backend)
     url: str   # HTTP URL the UI can render
 
 
@@ -59,53 +65,74 @@ class LocalImageStore:
         return ImageRef(path=abs_path, url=url)
 
 
-# [image-based-campaign] ── Firebase Storage backend ──────────────────────────
-def _firebase_bucket():
-    """Initialise the Firebase app once (idempotent) and return the bucket."""
-    if not settings.FIREBASE_STORAGE_BUCKET:
-        raise ValueError("Firebase backend needs FIREBASE_STORAGE_BUCKET.")
-    try:
-        import firebase_admin
-        from firebase_admin import credentials, storage
-    except ImportError as exc:
-        raise ValueError(
-            "Firebase backend needs the firebase-admin package: pip install firebase-admin"
-        ) from exc
-
-    if not firebase_admin._apps:  # not yet initialised in this process
-        if not settings.FIREBASE_CREDENTIALS_PATH:
-            raise ValueError("Firebase backend needs FIREBASE_CREDENTIALS_PATH (service-account JSON).")
-        cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
-        firebase_admin.initialize_app(cred, {"storageBucket": settings.FIREBASE_STORAGE_BUCKET})
-    return storage.bucket(settings.FIREBASE_STORAGE_BUCKET)
+# [image-based-campaign] ── Cloudinary backend ────────────────────────────────
+_CLOUDINARY_UPLOAD = "https://api.cloudinary.com/v1_1/{cloud}/image/upload"
 
 
-class FirebaseImageStore:
-    """Uploads to a Firebase Storage bucket; returns a signed URL the UI can render."""
+def _cloudinary_signature(params: dict[str, str], secret: str) -> str:
+    """Cloudinary signed upload: sha1 of alphabetically-sorted params + api_secret."""
+    to_sign = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    return hashlib.sha1(f"{to_sign}{secret}".encode()).hexdigest()
+
+
+class CloudinaryImageStore:
+    """Uploads to Cloudinary; returns a permanent public CDN URL.
+
+    Note: images are publicly readable by anyone holding the URL — the tradeoff
+    for having no signed-URL expiry to manage.
+    """
 
     def __init__(self) -> None:
-        self._bucket = _firebase_bucket()
+        missing = [n for n, v in (
+            ("CLOUDINARY_CLOUD_NAME", settings.CLOUDINARY_CLOUD_NAME),
+            ("CLOUDINARY_API_KEY", settings.CLOUDINARY_API_KEY),
+            ("CLOUDINARY_API_SECRET", settings.CLOUDINARY_API_SECRET),
+        ) if not v]
+        if missing:
+            raise ValueError(f"Cloudinary backend needs: {', '.join(missing)}.")
 
     def save(self, data: bytes, subdir: str, brief_id: str, name: str | None = None) -> ImageRef:
-        from datetime import timedelta
-
         fname = _filename(name, data)
-        blob_path = f"{subdir}/{brief_id}/{fname}"
-        blob = self._bucket.blob(blob_path)
-        blob.upload_from_string(data, content_type=_content_type(fname))
-        # Signed URL so the bucket stays private; TTL is configurable.
-        url = blob.generate_signed_url(
-            expiration=timedelta(days=settings.FIREBASE_SIGNED_URL_TTL_DAYS),
-            method="GET",
+        stem = fname.rsplit(".", 1)[0]
+        folder = f"{settings.CLOUDINARY_FOLDER}/{subdir}/{brief_id}".strip("/")
+
+        signed = {"folder": folder, "public_id": stem, "timestamp": str(int(time.time()))}
+        form = {
+            **signed,
+            "api_key": settings.CLOUDINARY_API_KEY,
+            "signature": _cloudinary_signature(signed, settings.CLOUDINARY_API_SECRET),
+        }
+        resp = httpx.post(
+            _CLOUDINARY_UPLOAD.format(cloud=settings.CLOUDINARY_CLOUD_NAME),
+            data=form,
+            files={"file": (fname, data, _content_type(fname))},
+            timeout=60,
         )
-        return ImageRef(path=f"gs://{self._bucket.name}/{blob_path}", url=url)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Cloudinary upload failed ({resp.status_code}): {resp.text[:300]}")
+
+        body = resp.json()
+        # public_id is the durable locator (re-fetch / delete later); secure_url renders.
+        return ImageRef(path=body["public_id"], url=body["secure_url"])
+
+
+#: Values that all mean "no cloud storage — keep images on local disk".
+_LOCAL_ALIASES = {"", "none", "null", "off", "false", "local", "disk"}
 
 
 def get_image_store():
-    # [image-based-campaign] Backend switch — one branch per store.
-    backend = settings.IMAGE_STORAGE_BACKEND
-    if backend == "local":
+    """[image-based-campaign] Backend switch — add one branch per new store.
+    A cloud backend only needs to implement save(bytes, ...) -> ImageRef.
+
+    Parsing is forgiving: the value is case-insensitive, and anything meaning
+    "no cloud" (NONE, off, empty, ...) falls back to local disk rather than
+    erroring — local storage always works, so it is the safe default."""
+    backend = (settings.IMAGE_STORAGE_BACKEND or "").strip().lower()
+    if backend in _LOCAL_ALIASES:
         return LocalImageStore()
-    if backend == "firebase":
-        return FirebaseImageStore()
-    raise ValueError(f"Unknown IMAGE_STORAGE_BACKEND: {backend!r}. Use 'local' or 'firebase'.")
+    if backend == "cloudinary":
+        return CloudinaryImageStore()
+    raise ValueError(
+        f"Unknown IMAGE_STORAGE_BACKEND: {settings.IMAGE_STORAGE_BACKEND!r}. "
+        "Use 'local' (or 'none') for disk, or 'cloudinary'."
+    )
