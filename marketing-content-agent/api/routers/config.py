@@ -66,6 +66,9 @@ _GROQ_MODELS = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
     "gemma-7b-it",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b",
+
 ]
 
 _EMBEDDING_MODELS = [
@@ -260,6 +263,7 @@ async def test_connection(payload: LLMConfig) -> dict[str, Any]:
     import time
 
     if payload.provider == "groq":
+        print(payload)
         if not payload.groq_api_key:
             return {"success": False, "error": "GROQ_API_KEY is required to test Groq."}
         try:
