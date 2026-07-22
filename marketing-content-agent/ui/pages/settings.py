@@ -12,6 +12,8 @@ _GROQ_MODELS_FALLBACK = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
     "gemma-7b-it",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b",
 ]
 
 _EMBEDDING_MODELS_FALLBACK = [
@@ -300,6 +302,7 @@ def render() -> None:
 def _test_connection(api_base: str, payload: dict) -> None:
     with st.spinner("Testing LLM connection…"):
         try:
+            #print(payload)
             r = httpx.post(f"{api_base}/config/test", json=payload, timeout=30.0)
             r.raise_for_status()
             result = r.json()

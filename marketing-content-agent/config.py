@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
 
+    # ── Judge LLM (optional; empty = reuse generator model) ──────────────────
+    JUDGE_GROQ_MODEL: str = ""
+    JUDGE_GROQ_API_KEY: str = ""
+
     # ── Embeddings ────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
@@ -86,6 +90,7 @@ def get_llm(temperature: float = 0.7):
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
             temperature=temperature,
+            max_tokens=4096,
         )
 
     if settings.LLM_PROVIDER == "ollama":
@@ -95,6 +100,27 @@ def get_llm(temperature: float = 0.7):
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
             temperature=temperature,
+            num_predict=4096,
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Use 'groq' or 'ollama'.")
+
+
+def get_judge_llm(temperature: float = 0.1):
+    """LLM used for evaluation (LLM-as-judge + RAGAS).
+    Falls back to the generator model when no judge model is configured.
+    Currently Groq only."""
+    judge_model = settings.JUDGE_GROQ_MODEL or settings.GROQ_MODEL
+    judge_api_key = settings.JUDGE_GROQ_API_KEY or settings.GROQ_API_KEY
+
+    if not judge_api_key:
+        raise ValueError("Judge model needs a Groq API key (GROQ_API_KEY or JUDGE_GROQ_API_KEY).")
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        api_key=judge_api_key,
+        model=judge_model,
+        temperature=temperature,
+        max_tokens=4096,
+    )

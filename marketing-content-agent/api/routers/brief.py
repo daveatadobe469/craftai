@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from api.schemas.brief import BriefPayload, BriefResponse
+from api.sse_queues import register, unregister
 from config import settings
 from db.sqlite import write_brief, write_audit
 from graph.state import AgentState
@@ -39,6 +40,7 @@ async def submit_brief(payload: BriefPayload, request: Request) -> BriefResponse
 
     queue: asyncio.Queue[str] = asyncio.Queue()
     request.app.state.queues[brief_id] = queue
+    register(brief_id, queue)
 
     initial_state: AgentState = {
         "brief_id": brief_id,
@@ -71,32 +73,32 @@ async def submit_brief(payload: BriefPayload, request: Request) -> BriefResponse
 
     from graph.builder import compiled_graph
 
+    app_queues = request.app.state.queues
+
     async def _run_graph(state: AgentState, q: asyncio.Queue[str]) -> None:
-        # Track how many sse_events have already been pushed so we only
-        # send the delta on each node completion (prevents duplicate messages).
+        run_brief_id = state["brief_id"]
         pushed_count = 0
         try:
             async for event in compiled_graph.astream(state):
                 for node_name, node_state in event.items():
                     all_events: list[str] = node_state.get("sse_events") or []
 
-                    # Only push events that haven't been sent yet
                     new_events = all_events[pushed_count:]
                     for msg in new_events:
                         await q.put(msg)
                     pushed_count = len(all_events)
 
-                    # ── Critical fix: push human_action_required BEFORE
-                    # human_gate_node runs and blocks.  The compliance route
-                    # logic is: gate when pass=True OR revisions exhausted.
                     if node_name == "compliance":
-                        compliance_pass  = node_state.get("compliance_pass", False)
-                        revision_count   = node_state.get("revision_count", 0)
+                        compliance_pass = node_state.get("compliance_pass", False)
+                        revision_count = node_state.get("revision_count", 0)
                         will_gate = compliance_pass or (revision_count >= settings.MAX_REVISIONS)
                         if will_gate:
                             await q.put("__human_action_required__")
 
-                    # Signal pipeline complete after curator finishes
+                    if node_name == "human_gate":
+                        if node_state.get("human_decision") == "rejected":
+                            await q.put("__pipeline_complete__")
+
                     if node_name == "curator":
                         await q.put("__pipeline_complete__")
 
@@ -104,6 +106,9 @@ async def submit_brief(payload: BriefPayload, request: Request) -> BriefResponse
         except Exception as exc:
             await q.put(f"__error__:{exc}")
             await q.put("__done__")
+        finally:
+            unregister(run_brief_id)
+            app_queues.pop(run_brief_id, None)
 
     task = asyncio.create_task(_run_graph(initial_state, queue))
     request.app.state.tasks[brief_id] = task

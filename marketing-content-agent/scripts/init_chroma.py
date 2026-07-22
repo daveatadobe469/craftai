@@ -25,7 +25,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "email",
         "brand": "GlowBrand",
-        "persona": "Premium Buyer",
+        "persona": "Premium Empty Nesters",
         "content": (
             "Subject: Your Exclusive Invitation — Platinum Skincare Collection\n"
             "Body: Dear {{first_name}}, experience the pinnacle of skincare innovation. "
@@ -38,7 +38,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "email",
         "brand": "TechNova",
-        "persona": "Young Professional",
+        "persona": "Digital Professionals",
         "content": (
             "Subject: Your Workflow Just Got 3× Faster\n"
             "Body: Hi {{first_name}}, TechNova Pro is now powered by our next-gen AI engine. "
@@ -50,7 +50,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "linkedin",
         "brand": "TechNova",
-        "persona": "Young Professional",
+        "persona": "Digital Professionals",
         "content": (
             "🚀 The future of productivity is here.\n\n"
             "We benchmarked 50+ enterprise tools. TechNova Pro came out on top — "
@@ -66,7 +66,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "social",
         "brand": "GlowBrand",
-        "persona": "Budget-Conscious",
+        "persona": "Smart-Saving Young Families",
         "content": (
             "Glow without breaking the bank ✨ "
             "Our bestselling vitamin C serum is now 30% off this weekend only. "
@@ -76,7 +76,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "social",
         "brand": "FreshFarms",
-        "persona": "Family Planner",
+        "persona": "Value Families",
         "content": (
             "Sunday farmers market energy 🥕🌿 "
             "Fresh, locally sourced, seasonal produce delivered to your door. "
@@ -86,7 +86,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "ad",
         "brand": "GlowBrand",
-        "persona": "Premium Buyer",
+        "persona": "Premium Empty Nesters",
         "content": (
             "Headline: Clinically Proven Glow\n"
             "Body: Dermatologist-approved platinum skincare. 47% fine line reduction in 14 days.\n"
@@ -96,7 +96,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "ad",
         "brand": "TechNova",
-        "persona": "Young Professional",
+        "persona": "Digital Professionals",
         "content": (
             "Headline: Work Smarter Today\n"
             "Body: AI-powered productivity suite trusted by 50,000 professionals. Free 14-day trial.\n"
@@ -106,7 +106,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "blog",
         "brand": "GlowBrand",
-        "persona": "Premium Buyer",
+        "persona": "Premium Empty Nesters",
         "content": (
             "Title: The Science Behind Platinum Skincare — What the Research Shows\n\n"
             "Introduction: In a crowded skincare market, separating science from marketing "
@@ -123,7 +123,7 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
     {
         "channel": "blog",
         "brand": "FreshFarms",
-        "persona": "Family Planner",
+        "persona": "Value Families",
         "content": (
             "Title: 7 Ways Seasonal Eating Benefits Your Family's Health\n\n"
             "Introduction: Choosing seasonal, locally sourced produce isn't just "

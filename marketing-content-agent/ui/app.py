@@ -5,6 +5,18 @@ from pathlib import Path
 
 import streamlit as st
 
+from ui.components.ollama_client import api_is_reachable, fetch_ollama_models
+from ui.components.progress import inject_progress_css, run_with_progress
+from ui.navigation import (
+    MAIN_TAB_AUDIT,
+    MAIN_TAB_LLM,
+    MAIN_TAB_STUDIO,
+    MAIN_TAB_UPLOAD,
+    STUDIO_TAB_CREATE,
+    render_main_nav,
+    render_studio_nav,
+)
+
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -27,6 +39,9 @@ _DEFAULTS: dict = {
     "llm_model":             None,
     "embedding_model":       None,
     "ollama_data":           None,
+    "review_brief_id":       "",
+    "craft_main_tab":        None,
+    "craft_studio_tab":      None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -48,6 +63,9 @@ header[data-testid="stHeader"]     { display: none !important; }
 #MainMenu                          { display: none !important; }
 footer                             { display: none !important; }
 .stDeployButton                    { display: none !important; }
+div[data-testid="stSpinner"],
+div[data-testid="stSpinner"] > div,
+.stSpinner                          { display: none !important; }
 
 /* ── Zero top gap so logo sits flush ──────────────────── */
 .block-container {
@@ -194,7 +212,7 @@ def _render_header() -> None:
 
     with header_r:
         brief_id = st.session_state.get("active_brief_id")
-        brief_text = f"Brief: {brief_id[:8]}…" if brief_id else "No active brief"
+        brief_text = f"Brief: {brief_id}" if brief_id else "No active brief"
         st.markdown(
             f"""
 <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center;height:100%;">
@@ -225,23 +243,36 @@ def _tab_llm_config() -> None:
     import httpx
 
     api_base = st.session_state["api_base"]
+    api_ok = api_is_reachable(api_base)
 
     # Fetch current config
     current: dict = {}
-    try:
-        r = httpx.get(f"{api_base}/config", timeout=4.0)
-        r.raise_for_status()
-        current = r.json()
-    except Exception:
-        st.warning(
-            "Cannot reach the API server. Start it with `python main.py`, then refresh.",
-            icon="⚠️",
+    if api_ok:
+        try:
+            r = httpx.get(f"{api_base}/config", timeout=4.0)
+            r.raise_for_status()
+            current = r.json()
+        except Exception as exc:
+            st.warning(f"Could not load saved config from API: {exc}", icon="⚠️")
+            api_ok = False
+
+    if not api_ok:
+        st.error(
+            f"**CRAFTAI backend API is not running** at `{api_base}`.\n\n"
+            "Ollama can run separately, but briefs and saving settings need the API. "
+            "Start everything with:\n\n`python main.py`",
+            icon="🚨",
         )
         current = {
-            "provider": "groq", "groq_model": "llama3-70b-8192",
-            "groq_api_key_set": False, "ollama_base_url": "http://localhost:11434",
-            "ollama_model": "llama3", "embedding_model": "all-MiniLM-L6-v2",
-            "judge_threshold": 0.7, "crag_threshold": 0.5, "max_revisions": 3,
+            "provider": "ollama",
+            "groq_model": "llama3-70b-8192",
+            "groq_api_key_set": False,
+            "ollama_base_url": "http://127.0.0.1:11434",
+            "ollama_model": "llama3",
+            "embedding_model": "all-MiniLM-L6-v2",
+            "judge_threshold": 0.7,
+            "crag_threshold": 0.5,
+            "max_revisions": 3,
         }
 
     # ── Provider cards ────────────────────────────────────────────────────────
@@ -283,7 +314,7 @@ def _tab_llm_config() -> None:
     ollama_base_url = current.get("ollama_base_url", "http://localhost:11434")
 
     _GROQ_MODELS = [
-       "openai/gpt-oss-120b", "llama3-70b-8192", "llama3-8b-8192", "llama-3.1-70b-versatile",
+        "llama3-70b-8192", "llama3-8b-8192", "llama-3.1-70b-versatile",
         "llama-3.1-8b-instant", "llama-3.3-70b-versatile",
         "mixtral-8x7b-32768", "gemma2-9b-it", "gemma-7b-it",
     ]
@@ -330,7 +361,8 @@ def _tab_llm_config() -> None:
         with o1:
             ollama_base_url = st.text_input(
                 "Ollama Server URL",
-                value=current.get("ollama_base_url", "http://localhost:11434"),
+                value=current.get("ollama_base_url", "http://127.0.0.1:11434"),
+                help="Use http://127.0.0.1:11434 if localhost fails on your machine.",
             )
         with o2:
             st.write("")
@@ -338,28 +370,27 @@ def _tab_llm_config() -> None:
                 st.session_state["ollama_data"] = None
 
         if not st.session_state.get("ollama_data"):
-            with st.spinner("Querying Ollama…"):
-                try:
-                    resp = httpx.get(
-                        f"{api_base}/config/ollama/models",
-                        params={"base_url": ollama_base_url},
-                        timeout=6.0,
-                    )
-                    st.session_state["ollama_data"] = resp.json()
-                except Exception:
-                    st.session_state["ollama_data"] = {
-                        "available": False, "models": [],
-                        "error": "Cannot reach API",
-                    }
+            st.session_state["ollama_data"] = run_with_progress(
+                "Querying Ollama…",
+                lambda: fetch_ollama_models(api_base, ollama_base_url),
+                estimated_seconds=5,
+            )
 
         od = st.session_state.get("ollama_data") or {}
+        if od.get("api_warning"):
+            st.warning(od["api_warning"], icon="⚠️")
         if not od.get("available"):
-            st.error(f"Ollama not reachable — {od.get('error','')}")
-            st.code("brew install ollama && ollama pull llama3 && ollama serve")
+            st.error(f"Ollama not reachable — {od.get('error', 'unknown error')}")
+            st.code(
+                "ollama serve          # start server\n"
+                "ollama list           # verify models\n"
+                "ollama pull llama3.2:3b"
+            )
             ollama_models = [current.get("ollama_model", "llama3")]
         else:
             raw = od.get("models", [])
-            st.success(f"Ollama running — **{len(raw)} model(s)** installed")
+            via = "via CRAFTAI API" if od.get("via_api", True) else "via direct local connection"
+            st.success(f"Ollama running ({via}) — **{len(raw)} model(s)** installed")
             if raw:
                 st.dataframe(
                     [{"Model": m["name"], "Size (GB)": m["size_gb"], "Family": m["family"]}
@@ -438,10 +469,17 @@ def _tab_llm_config() -> None:
     b1, b2 = st.columns(2)
     with b1:
         if st.button("🧪 Test Connection", use_container_width=True):
-            with st.spinner("Testing LLM connection…"):
+            if not api_ok:
+                st.error("Cannot test — start the CRAFTAI API first: `python main.py`")
+            else:
                 try:
-                    tr = httpx.post(f"{api_base}/config/test", json=payload, timeout=30.0)
-                    res = tr.json()
+                    res = run_with_progress(
+                        "Testing LLM connection…",
+                        lambda: httpx.post(
+                            f"{api_base}/config/test", json=payload, timeout=30.0
+                        ).json(),
+                        estimated_seconds=8,
+                    )
                     if res.get("success"):
                         st.success(
                             f"Connected — **{res.get('model')}** · {res.get('latency_ms')} ms\n\n"
@@ -454,18 +492,28 @@ def _tab_llm_config() -> None:
 
     with b2:
         if st.button("💾 Save & Apply", use_container_width=True, type="primary"):
-            with st.spinner("Saving configuration…"):
+            if not api_ok:
+                st.error("Cannot save — start the CRAFTAI API first: `python main.py`")
+            else:
                 try:
-                    sr = httpx.post(f"{api_base}/config", json=payload, timeout=15.0)
-                    sr.raise_for_status()
-                    saved = sr.json()
+                    def _save_config():
+                        sr = httpx.post(f"{api_base}/config", json=payload, timeout=15.0)
+                        sr.raise_for_status()
+                        return sr.json()
+
+                    saved = run_with_progress(
+                        "Saving configuration…",
+                        _save_config,
+                        estimated_seconds=6,
+                        sublabel="Writing settings to .env",
+                    )
                     _prov = saved.get("provider", "")
-                    _mdl  = saved.get("groq_model") if _prov == "groq" else saved.get("ollama_model")
-                    _emb  = saved.get("embedding_model", "")
-                    st.session_state["llm_provider"]   = _prov
-                    st.session_state["llm_model"]      = _mdl
+                    _mdl = saved.get("groq_model") if _prov == "groq" else saved.get("ollama_model")
+                    _emb = saved.get("embedding_model", "")
+                    st.session_state["llm_provider"] = _prov
+                    st.session_state["llm_model"] = _mdl
                     st.session_state["embedding_model"] = _emb
-                    st.session_state["ollama_data"]    = None
+                    st.session_state["ollama_data"] = None
                     st.success(
                         f"✅ **Configuration saved successfully!**\n\n"
                         f"- Provider: **{_prov.upper()}**\n"
@@ -572,33 +620,45 @@ def _tab_upload() -> None:
         )
         top_k = st.slider("Top K results", 1, 10, 5)
         if st.button("🔍 Search", type="primary", use_container_width=True, disabled=not query.strip()):
-            with st.spinner("Searching knowledge base…"):
-                try:
+            try:
+                def _search():
                     sr = httpx.post(
                         f"{api_base}/search",
-                        json={"query": query.strip(), "collection": search_coll, "top_k": top_k, "filters": {}},
+                        json={
+                            "query": query.strip(),
+                            "collection": search_coll,
+                            "top_k": top_k,
+                            "filters": {},
+                        },
                         timeout=15.0,
                     )
-                    results = sr.json().get("results", [])
-                    if not results:
-                        st.info("No results. Upload documents or run `make index`.")
-                    for i, res in enumerate(results, 1):
-                        score = res.get("score", 0)
-                        doc = res.get("document", "")
-                        color = _COLLS.get(search_coll, ("", "#00d4ff"))[1]
-                        st.markdown(
-                            f'<div class="ca-card" style="border-left:3px solid {color};">'
-                            f'<div style="display:flex;justify-content:space-between;">'
-                            f'<span style="color:#8aa3b8;font-size:.78rem;">Result {i}</span>'
-                            f'<span style="color:{color};font-weight:700;">{score:.3f}</span>'
-                            f'</div>'
-                            f'<div style="font-size:.82rem;color:#b0bec5;margin-top:8px;white-space:pre-wrap;">'
-                            f'{doc[:300]}{"…" if len(doc) > 300 else ""}'
-                            f'</div></div>',
-                            unsafe_allow_html=True,
-                        )
-                except Exception as exc:
-                    st.error(f"Search failed: {exc}")
+                    sr.raise_for_status()
+                    return sr.json().get("results", [])
+
+                results = run_with_progress(
+                    "Searching knowledge base…",
+                    _search,
+                    estimated_seconds=6,
+                )
+                if not results:
+                    st.info("No results. Upload documents or run `make index`.")
+                for i, res in enumerate(results, 1):
+                    score = res.get("score", 0)
+                    doc = res.get("document", "")
+                    color = _COLLS.get(search_coll, ("", "#00d4ff"))[1]
+                    st.markdown(
+                        f'<div class="ca-card" style="border-left:3px solid {color};">'
+                        f'<div style="display:flex;justify-content:space-between;">'
+                        f'<span style="color:#8aa3b8;font-size:.78rem;">Result {i}</span>'
+                        f'<span style="color:{color};font-weight:700;">{score:.3f}</span>'
+                        f'</div>'
+                        f'<div style="font-size:.82rem;color:#b0bec5;margin-top:8px;white-space:pre-wrap;">'
+                        f'{doc[:300]}{"…" if len(doc) > 300 else ""}'
+                        f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
+            except Exception as exc:
+                st.error(f"Search failed: {exc}")
 
     st.divider()
 
@@ -653,8 +713,8 @@ def _do_upload(api_base, uploaded_file, collection, brand_tag, channel_tag, chun
 
     file_bytes = uploaded_file.read()
     filename = uploaded_file.name
-    with st.spinner(f"Embedding '{filename}'…"):
-        try:
+    try:
+        def _upload():
             r = httpx.post(
                 f"{api_base}/ingest",
                 files={"file": (filename, file_bytes, "application/octet-stream")},
@@ -668,33 +728,40 @@ def _do_upload(api_base, uploaded_file, collection, brand_tag, channel_tag, chun
                 timeout=120.0,
             )
             r.raise_for_status()
-            result = r.json()
-            st.success(
-                f"Embedded **{result.get('chunks')} chunks** from `{filename}` → `{collection}`"
-            )
-            st.code(f"Document ID: {result.get('doc_id')}")
-            st.session_state["upload_success_doc_id"] = result.get("doc_id")
-            st.rerun()
-        except httpx.ConnectError:
-            st.error("Cannot connect to API.")
-        except httpx.HTTPStatusError as exc:
-            try:
-                detail = exc.response.json().get("detail", exc.response.text)
-            except Exception:
-                detail = exc.response.text
-            st.error(f"Upload failed: {detail}")
-        except Exception as exc:
-            st.error(f"Error: {exc}")
+            return r.json()
+
+        result = run_with_progress(
+            f"Embedding '{filename}'…",
+            _upload,
+            estimated_seconds=30,
+            sublabel="Chunking and indexing document",
+        )
+        st.success(
+            f"Embedded **{result.get('chunks')} chunks** from `{filename}` → `{collection}`"
+        )
+        st.code(f"Document ID: {result.get('doc_id')}")
+        st.session_state["upload_success_doc_id"] = result.get("doc_id")
+        st.rerun()
+    except httpx.ConnectError:
+        st.error("Cannot connect to API.")
+    except httpx.HTTPStatusError as exc:
+        try:
+            detail = exc.response.json().get("detail", exc.response.text)
+        except Exception:
+            detail = exc.response.text
+        st.error(f"Upload failed: {detail}")
+    except Exception as exc:
+        st.error(f"Error: {exc}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB: Content Studio
 # ═════════════════════════════════════════════════════════════════════════════
 def _tab_content_studio() -> None:
-    studio_tabs = st.tabs(["✍️ Create Brief", "👁️ Review Draft"])
-    with studio_tabs[0]:
+    studio_tab = render_studio_nav()
+    if studio_tab == STUDIO_TAB_CREATE:
         _load("creator").render()
-    with studio_tabs[1]:
+    else:
         _load("reviewer").render()
 
 
@@ -703,6 +770,7 @@ def _tab_content_studio() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 def main() -> None:
     _inject_css()
+    inject_progress_css()
     _render_header()
 
     # API URL quick override
@@ -717,24 +785,16 @@ def main() -> None:
             st.session_state["api_base"] = new_api.rstrip("/")
             st.rerun()
 
-    # Top-level tabs
-    tabs = st.tabs([
-        "⚙️  LLM Configuration",
-        "📂  Document Upload & Pipeline",
-        "✍️  Content Studio",
-        "📋  Audit & Observability",
-    ])
+    # Top-level navigation (session-persisted — survives reruns)
+    main_tab = render_main_nav()
 
-    with tabs[0]:
+    if main_tab == MAIN_TAB_LLM:
         _tab_llm_config()
-
-    with tabs[1]:
+    elif main_tab == MAIN_TAB_UPLOAD:
         _tab_upload()
-
-    with tabs[2]:
+    elif main_tab == MAIN_TAB_STUDIO:
         _tab_content_studio()
-
-    with tabs[3]:
+    elif main_tab == MAIN_TAB_AUDIT:
         _load("audit").render()
 
 

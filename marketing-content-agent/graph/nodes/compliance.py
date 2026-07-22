@@ -7,7 +7,7 @@ import mlflow
 
 from compliance.judge import score_draft
 from compliance.tools import run_all_checks
-from config import get_llm, settings
+from config import get_judge_llm, settings
 from db.sqlite import update_brief_status, write_draft
 from graph.state import AgentState
 
@@ -69,6 +69,7 @@ async def compliance_node(state: AgentState) -> AgentState:
             persona_limits=persona_limits if persona_limits else None,
             extra_required=None,
             allowed_domains=None,
+            draft_metadata=state.get("draft_metadata") or {},
         )
 
         sse_events.append(
@@ -80,7 +81,7 @@ async def compliance_node(state: AgentState) -> AgentState:
             g.get("document", "") for g in retrieved_guidelines[:3]
         )
 
-        llm = get_llm(temperature=0.1)
+        llm = get_judge_llm(temperature=0.1)
         sse_events.append("[Compliance] Running LLM-as-judge scoring…")
 
         loop = asyncio.get_event_loop()

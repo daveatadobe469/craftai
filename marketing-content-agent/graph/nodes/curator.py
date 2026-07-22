@@ -8,7 +8,7 @@ from typing import Any
 import mlflow
 
 from config import settings
-from db.sqlite import write_audit, write_draft
+from db.sqlite import update_brief_status, write_audit, write_draft
 from graph.state import AgentState
 from rag import chroma_client as cc
 from rag import embedder
@@ -121,6 +121,13 @@ async def curator_node(state: AgentState) -> AgentState:
                 "draft_id": draft_id,
             },
             "curator",
+        )
+
+        await loop.run_in_executor(
+            None,
+            update_brief_status,
+            brief_id,
+            "complete",
         )
 
         try:

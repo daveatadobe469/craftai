@@ -8,7 +8,53 @@ from typing import Literal
 import httpx
 import streamlit as st
 
+from ui.components.progress import (
+    inject_progress_css,
+    run_with_progress,
+    show_ring,
+    steps_to_percent,
+)
+
 _PIPELINE_TIMEOUT_S = 180
+
+# ── Persona options (loaded from API) ─────────────────────────────────────────
+_FALLBACK_PERSONAS: list[str] = [
+    "Premium Empty Nesters",
+    "Smart-Saving Young Families",
+    "Premium Professionals",
+    "Value Families",
+    "Connected Families",
+    "Digital Professionals",
+]
+
+_FALLBACK_PERSONA_DISPLAY: dict[str, str] = {name: name for name in _FALLBACK_PERSONAS}
+
+
+def _persona_display_label(persona: dict) -> str:
+    """Selectbox label — friendly persona name only."""
+    return (persona.get("name") or "Unknown persona").strip()
+
+
+def _fetch_persona_options(api_base: str) -> tuple[list[str], dict[str, str]]:
+    """Return persona names and name→display labels from the API."""
+    displays: dict[str, str] = {}
+    try:
+        r = httpx.get(f"{api_base}/personas", timeout=5.0)
+        r.raise_for_status()
+        personas = r.json().get("personas") or []
+        if personas:
+            names: list[str] = []
+            for p in personas:
+                name = p.get("name", "")
+                if not name:
+                    continue
+                names.append(name)
+                displays[name] = _persona_display_label(p)
+            if names:
+                return names, displays
+    except Exception:
+        pass
+    return _FALLBACK_PERSONAS, dict(_FALLBACK_PERSONA_DISPLAY)
 
 # ── Step data model ────────────────────────────────────────────────────────────
 Status = Literal["pending", "running", "done", "error", "waiting"]
@@ -97,9 +143,23 @@ def _step_html(step: Step, idx: int, elapsed: float) -> str:
     )
 
 
-def _render_all(phs: list, steps: list[Step], elapsed: float) -> None:
+def _render_all(
+    phs: list,
+    steps: list[Step],
+    elapsed: float,
+    progress_ph=None,
+) -> None:
     for i, (ph, step) in enumerate(zip(phs, steps), 1):
         ph.markdown(_step_html(step, i, elapsed), unsafe_allow_html=True)
+    if progress_ph is not None:
+        pct = steps_to_percent(steps)
+        show_ring(
+            progress_ph,
+            pct,
+            "Running AI pipeline…",
+            f"{pct}% complete · {elapsed:.0f}s elapsed",
+            height=240,
+        )
 
 
 # ── SSE → step state machine ───────────────────────────────────────────────────
@@ -163,14 +223,17 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
     """Full inline review card shown when the pipeline pauses at Human Gate."""
 
     # Fetch current draft + compliance data
-    draft_data: dict = {}
     try:
-        r = httpx.get(f"{api_base}/status/{brief_id}", timeout=10.0)
-        if r.status_code == 200:
-            draft_data = r.json()
-        else:
-            st.error(f"Cannot fetch draft (status {r.status_code}).")
-            return
+        def _fetch_draft():
+            r = httpx.get(f"{api_base}/status/{brief_id}", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+
+        draft_data = run_with_progress(
+            "Loading draft for review…",
+            _fetch_draft,
+            estimated_seconds=4,
+        )
     except Exception as exc:
         st.error(f"Cannot reach API: {exc}")
         return
@@ -218,7 +281,7 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
         f'  DRAFT READY — YOUR REVIEW IS REQUIRED</div>'
         f'  <div style="font-size:0.78rem;color:#8aa3b8;margin-top:4px;">'
         f'  Brief: <code style="color:#ff9500;background:#1e1505;'
-        f'  padding:1px 6px;border-radius:4px;">{brief_id[:16]}…</code>'
+        f'  padding:1px 6px;border-radius:4px;word-break:break-all;">{brief_id}</code>'
         f'  &nbsp;·&nbsp; {channel}'
         f'  &nbsp;·&nbsp; {brand}'
         f'  &nbsp;·&nbsp; {persona}</div>'
@@ -368,6 +431,22 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
         _submit_decision(api_base, brief_id, "rejected", None, reviewer)
 
 
+def _poll_pipeline_terminal(api_base: str, brief_id: str, max_seconds: int = 120) -> dict | None:
+    """Wait until brief reaches indexed/rejected or timeout."""
+    deadline = time.time() + max_seconds
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(f"{api_base}/status/{brief_id}", timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("status") in ("indexed", "rejected"):
+                return data
+        except Exception:
+            pass
+        time.sleep(2)
+    return None
+
+
 def _submit_decision(
     api_base: str, brief_id: str, decision: str,
     edits: str | None, reviewer: str,
@@ -381,53 +460,79 @@ def _submit_decision(
     color = _dec_colors.get(decision, "#00d4ff")
     icon  = _dec_icons.get(decision, "📋")
 
-    with st.spinner(f"Submitting decision: {decision}…"):
-        try:
+    try:
+        def _post_decision():
             r = httpx.post(
                 f"{api_base}/decision/{brief_id}",
                 json=payload,
                 timeout=15.0,
             )
             r.raise_for_status()
-            st.session_state["gate_decision_made"] = True
-            st.session_state.pop("gate_brief_id", None)
+            return r
 
-            if decision in ("approved", "edited"):
+        run_with_progress(
+            f"Submitting decision: {decision}…",
+            _post_decision,
+            estimated_seconds=5,
+        )
+        st.session_state["gate_decision_made"] = True
+        st.session_state["gate_brief_id"] = brief_id
+
+        if decision in ("approved", "edited"):
+            st.success(
+                f"{icon} **Decision submitted: {decision.upper()}**\n\n"
+                "Resuming pipeline — Curator is indexing your content…"
+            )
+            final = run_with_progress(
+                "Waiting for Curator to finish…",
+                lambda: _poll_pipeline_terminal(api_base, brief_id),
+                estimated_seconds=30,
+                sublabel="Step 7 · Index to knowledge base",
+            )
+            if final and final.get("status") == "indexed":
+                doc_id = final.get("indexed_doc_id") or "—"
                 st.success(
-                    f"{icon} **Decision submitted: {decision.upper()}**\n\n"
-                    "The pipeline is resuming — the Curator will now index the approved content. "
-                    "You can check the Audit tab for the final result."
+                    f"Pipeline complete — content indexed to the knowledge base.\n\n"
+                    f"Document ID: `{doc_id}`"
                 )
+            elif final and final.get("status") == "rejected":
+                st.warning("Brief ended with status **rejected**.")
             else:
-                st.error(
-                    f"{icon} **Draft rejected.** The pipeline has ended for this brief.\n\n"
-                    "You can submit a new brief with an updated key message below."
+                st.info(
+                    "Pipeline is still running in the background. "
+                    "Check **Search Brief** or **Audit** for the final status."
                 )
-
-            st.markdown(
-                f'<div style="background:#0b1525;border:1px solid {color};border-left:4px solid {color};'
-                f'border-radius:10px;padding:12px 16px;margin-top:12px;">'
-                f'<div style="color:{color};font-weight:700;">Brief ID: <code style="color:{color};">'
-                f'{brief_id}</code></div>'
-                f'<div style="color:#8aa3b8;font-size:0.78rem;margin-top:4px;">'
-                f'Decision: {decision.upper()} · Reviewer: {reviewer}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
+        else:
+            st.error(
+                f"{icon} **Draft rejected.** The pipeline has ended for this brief.\n\n"
+                "You can submit a new brief with an updated key message below."
             )
 
-            if st.button("Submit Another Brief", type="secondary"):
-                for k in ("gate_brief_id", "gate_decision_made", "active_brief_id"):
-                    st.session_state.pop(k, None)
-                st.rerun()
+        st.markdown(
+            f'<div style="background:#0b1525;border:1px solid {color};border-left:4px solid {color};'
+            f'border-radius:10px;padding:12px 16px;margin-top:12px;">'
+            f'<div style="color:{color};font-weight:700;">Brief ID: <code style="color:{color};">'
+            f'{brief_id}</code></div>'
+            f'<div style="color:#8aa3b8;font-size:0.78rem;margin-top:4px;">'
+            f'Decision: {decision.upper()} · Reviewer: {reviewer}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-        except httpx.HTTPStatusError as exc:
-            st.error(f"API error {exc.response.status_code}: {exc.response.text}")
-        except Exception as exc:
-            st.error(f"Decision submission failed: {exc}")
+        if st.button("Submit Another Brief", type="secondary"):
+            for k in ("gate_brief_id", "gate_decision_made", "active_brief_id"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    except httpx.HTTPStatusError as exc:
+        st.error(f"API error {exc.response.status_code}: {exc.response.text}")
+    except Exception as exc:
+        st.error(f"Decision submission failed: {exc}")
 
 
 # ── Main render ────────────────────────────────────────────────────────────────
 def render() -> None:
+    inject_progress_css()
     api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
 
     # ── If a pipeline is paused at Human Gate, show review panel ──────────────
@@ -449,6 +554,31 @@ def render() -> None:
             unsafe_allow_html=True,
         )
 
+    elif gate_decision_ok and gate_brief_id:
+        try:
+            resp = httpx.get(f"{api_base}/status/{gate_brief_id}", timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                status = data.get("status", "unknown")
+                if status == "indexed":
+                    st.success(
+                        f"Brief `{gate_brief_id}` is **indexed**. "
+                        f"Doc ID: `{data.get('indexed_doc_id') or '—'}`"
+                    )
+                elif status == "curating":
+                    st.info("Curator is still indexing — refresh in a few seconds.")
+                elif status == "rejected":
+                    st.warning("This brief was **rejected**.")
+                else:
+                    st.info(f"Brief status: **{status}**")
+        except Exception:
+            st.info("Decision recorded — check **Search Brief** or **Audit** for status.")
+        if st.button("✨ Submit a New Brief", type="primary"):
+            for k in ("gate_brief_id", "gate_decision_made", "active_brief_id"):
+                st.session_state.pop(k, None)
+            st.rerun()
+        return
+
     elif gate_decision_ok:
         # Decision was just made — clear state on next interaction
         if st.button("✨ Submit a New Brief", type="primary"):
@@ -463,10 +593,14 @@ def render() -> None:
         "Typical time: **30–60 s** with a 3B model, 60–90 s with 8B."
     )
 
+    api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
+    persona_names, persona_displays = _fetch_persona_options(api_base)
+
     with st.form("brief_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
         with col1:
             brand = st.text_input("Brand Name *", placeholder="e.g. GlowBrand")
+        with col2:
             channel = st.selectbox(
                 "Channel *",
                 options=["email", "linkedin", "social", "ad", "blog"],
@@ -478,12 +612,12 @@ def render() -> None:
                     "blog":     "📝 Blog Post",
                 }[x],
             )
-        with col2:
-            persona = st.selectbox(
-                "Target Persona *",
-                options=["Budget-Conscious", "Premium Buyer",
-                         "Family Planner", "Young Professional"],
-            )
+        persona = st.selectbox(
+            "Target Persona *",
+            options=persona_names,
+            format_func=lambda n: persona_displays.get(n, n),
+            help="Audience segment with age range and spend profile — pick the best match for your campaign.",
+        )
         key_message = st.text_area(
             "Key Message *",
             placeholder="What is the core message? (min 10 characters)",
@@ -526,23 +660,31 @@ def render() -> None:
     }
 
     # ── Submit brief to API ───────────────────────────────────────────────────
-    with st.spinner("Submitting brief…"):
-        try:
+    try:
+        def _submit_brief():
             resp = httpx.post(f"{api_base}/brief", json=payload, timeout=20.0)
             resp.raise_for_status()
-            data = resp.json()
-        except httpx.ConnectError:
-            st.error(
-                f"Cannot connect to API at `{api_base}`. "
-                "Start the backend first: `python main.py`"
-            )
-            return
-        except httpx.HTTPStatusError as exc:
-            st.error(f"API error {exc.response.status_code}: {exc.response.text}")
-            return
+            return resp.json()
+
+        data = run_with_progress(
+            "Submitting brief…",
+            _submit_brief,
+            estimated_seconds=6,
+            sublabel="Starting AI pipeline",
+        )
+    except httpx.ConnectError:
+        st.error(
+            f"Cannot connect to API at `{api_base}`. "
+            "Start the backend first: `python main.py`"
+        )
+        return
+    except httpx.HTTPStatusError as exc:
+        st.error(f"API error {exc.response.status_code}: {exc.response.text}")
+        return
 
     brief_id = data["brief_id"]
     st.session_state["active_brief_id"] = brief_id
+    st.session_state["review_brief_id"] = brief_id
     st.success(f"Brief accepted — ID: `{brief_id}`")
 
     # ── 7-step live tracker ───────────────────────────────────────────────────
@@ -552,15 +694,16 @@ def render() -> None:
         unsafe_allow_html=True,
     )
 
-    step_phs  = [st.empty() for _ in range(7)]
-    result_ph = st.empty()
+    step_phs    = [st.empty() for _ in range(7)]
+    progress_ph = st.empty()
+    result_ph   = st.empty()
 
     steps      = _fresh_steps()
     start_time = time.time()
 
     steps[0].status  = "done"
     steps[0].elapsed = 0.0
-    _render_all(step_phs, steps, 0.0)
+    _render_all(step_phs, steps, 0.0, progress_ph)
 
     # ── SSE stream ────────────────────────────────────────────────────────────
     trace_lines:     list[str] = []
@@ -590,7 +733,7 @@ def render() -> None:
                         if msg and not msg.startswith("__"):
                             trace_lines.append(msg)
                             _update_steps(steps, msg, now, start_time)
-                            _render_all(step_phs, steps, elapsed)
+                            _render_all(step_phs, steps, elapsed, progress_ph)
 
                     elif line.startswith("event:"):
                         etype = line[6:].strip()
@@ -601,7 +744,7 @@ def render() -> None:
                                 steps[4].elapsed = elapsed
                             steps[5].status = "waiting"
                             steps[5].detail = "Your approval is needed — see review panel below"
-                            _render_all(step_phs, steps, elapsed)
+                            _render_all(step_phs, steps, elapsed, progress_ph)
                             gate_fired = True
                             break
 
@@ -610,10 +753,10 @@ def render() -> None:
                                 if s.status in ("pending", "running", "waiting"):
                                     s.status  = "done"
                                     s.elapsed = elapsed
-                            _render_all(step_phs, steps, elapsed)
+                            _render_all(step_phs, steps, elapsed, progress_ph)
                             result_ph.success(
                                 f"Pipeline complete in **{elapsed:.0f}s**! "
-                                "Check the **👁️ Review Draft** tab or the Audit log."
+                                "Check **🔍 Search Brief** or the Audit log."
                             )
                             break
 
@@ -622,7 +765,7 @@ def render() -> None:
                                 if s.status in ("pending", "running"):
                                     s.status  = "done"
                                     s.elapsed = elapsed
-                            _render_all(step_phs, steps, elapsed)
+                            _render_all(step_phs, steps, elapsed, progress_ph)
                             break
 
                         elif etype == "error":
@@ -630,7 +773,7 @@ def render() -> None:
                                 if s.status == "running":
                                     s.status  = "error"
                                     s.elapsed = elapsed
-                            _render_all(step_phs, steps, elapsed)
+                            _render_all(step_phs, steps, elapsed, progress_ph)
                             result_ph.error(
                                 "Pipeline error — check backend terminal logs."
                             )
@@ -641,10 +784,10 @@ def render() -> None:
         for s in steps:
             if s.status == "running":
                 s.detail = "Stream timed out — still running in backend"
-        _render_all(step_phs, steps, elapsed)
+        _render_all(step_phs, steps, elapsed, progress_ph)
         result_ph.warning(
             f"Stream timed out after {elapsed:.0f}s. Brief is still processing.\n\n"
-            f"Brief ID: `{brief_id}`  — check **👁️ Review Draft** in a moment.",
+            f"Brief ID: `{brief_id}`  — check **🔍 Search Brief** in a moment.",
             icon="⚠️",
         )
     except httpx.ConnectError:
@@ -657,7 +800,15 @@ def render() -> None:
     # that occurs when rendering it both here AND at the top of render()).
     if gate_fired:
         st.session_state["gate_brief_id"] = brief_id
+        st.session_state["review_brief_id"] = brief_id
+        st.session_state["active_brief_id"] = brief_id
+        from ui.navigation import MAIN_TAB_STUDIO, STUDIO_TAB_CREATE, navigate_to
+
+        navigate_to(MAIN_TAB_STUDIO, STUDIO_TAB_CREATE)
         st.rerun()
+    else:
+        show_ring(progress_ph, 100, "Pipeline finished", "All steps complete", height=240)
+        time.sleep(0.8)
 
     # ── Full trace collapsible ────────────────────────────────────────────────
     if trace_lines:
