@@ -140,6 +140,31 @@ def update_latest_draft_decision(
     return True
 
 
+# [image-based-campaign] Merge extra keys (e.g. image_url/image_path) into the
+# latest draft's metadata JSON — lets the art-director node attach an image
+# reference without a schema change.
+def update_latest_draft_metadata(brief_id: str, extra: dict[str, Any]) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT draft_id, metadata FROM drafts
+            WHERE brief_id=?
+            ORDER BY revision_count DESC, created_at DESC
+            LIMIT 1
+            """,
+            (brief_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        metadata = json.loads(row["metadata"] or "{}")
+        metadata.update(extra)
+        conn.execute(
+            "UPDATE drafts SET metadata=? WHERE draft_id=?",
+            (json.dumps(metadata), row["draft_id"]),
+        )
+    return True
+
+
 def get_audit_event_data(brief_id: str, event_type: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
