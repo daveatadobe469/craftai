@@ -17,12 +17,39 @@ def route(state: AgentState) -> str:
     Conditional edge router after compliance_node.
     Returns "revise" if non-compliant and under MAX_REVISIONS, else "gate".
     """
+    # Fail open: if the judge could not be evaluated (rate limit / API error) we
+    # cannot claim the draft is non-compliant, so send it to a human instead of
+    # burning revisions on a score that was never real.
+    if state.get("judge_unavailable"):
+        return "gate"
+
     revision_count = state.get("revision_count") or 0
     compliance_pass = state.get("compliance_pass", False)
 
     if not compliance_pass and revision_count < settings.MAX_REVISIONS:
         return "revise"
     return "gate"
+
+
+def _ragas_contexts(state: AgentState) -> list[str]:
+    """Retrieved documents used as RAGAS context for the final draft."""
+    retrieved = (state.get("retrieved_campaigns") or []) + (state.get("retrieved_guidelines") or [])
+    return [c.get("document", "") for c in retrieved if c.get("document")]
+
+
+async def _run_ragas(state: AgentState, draft: str) -> dict[str, float]:
+    """Single RAGAS evaluation of the draft heading to the human gate."""
+    from rag import evaluator
+
+    brief_text = (
+        f"Brand: {state.get('brand', '')}. Channel: {state.get('channel', '')}. "
+        f"Persona: {state.get('persona', '')}. Key message: {state.get('key_message', '')}."
+    )
+    return await evaluator.evaluate_ragas(
+        question=brief_text,
+        answer=draft,
+        contexts=_ragas_contexts(state),
+    )
 
 
 async def compliance_node(state: AgentState) -> AgentState:
@@ -85,7 +112,7 @@ async def compliance_node(state: AgentState) -> AgentState:
         sse_events.append("[Compliance] Running LLM-as-judge scoring…")
 
         loop = asyncio.get_event_loop()
-        judge_score, judge_evidence = await score_draft(
+        raw_score, judge_evidence = await score_draft(
             draft=draft,
             channel=channel,
             brand=brand,
@@ -93,15 +120,25 @@ async def compliance_node(state: AgentState) -> AgentState:
             llm=llm,
         )
 
-        compliance_pass = (
-            len(violations) == 0 and judge_score >= settings.JUDGE_THRESHOLD
-        )
+        # score_draft returns None when the judge could not run at all.
+        judge_unavailable = raw_score is None
+        judge_score = 0.0 if judge_unavailable else raw_score
 
-        sse_events.append(
-            f"[Compliance] Judge score: {judge_score:.2f} "
-            f"(threshold: {settings.JUDGE_THRESHOLD}). "
-            f"Pass: {compliance_pass}."
-        )
+        if judge_unavailable:
+            compliance_pass = False
+            sse_events.append(
+                f"[Compliance] Judge UNAVAILABLE ({judge_evidence}). "
+                "Failing open — sending to human review without counting a revision."
+            )
+        else:
+            compliance_pass = (
+                len(violations) == 0 and judge_score >= settings.JUDGE_THRESHOLD
+            )
+            sse_events.append(
+                f"[Compliance] Judge score: {judge_score:.2f} "
+                f"(threshold: {settings.JUDGE_THRESHOLD}). "
+                f"Pass: {compliance_pass}."
+            )
 
         try:
             mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
@@ -115,11 +152,31 @@ async def compliance_node(state: AgentState) -> AgentState:
         except Exception:
             pass
 
-        new_revision_count = revision_count + (0 if compliance_pass else 1)
+        # Don't count a revision when the judge never actually ran.
+        if judge_unavailable:
+            new_revision_count = revision_count
+        else:
+            new_revision_count = revision_count + (0 if compliance_pass else 1)
 
         # Persist draft to SQLite NOW so the status endpoint can read it
         # at the human-gate stage (before the curator runs after approval).
-        will_gate = compliance_pass or (new_revision_count >= settings.MAX_REVISIONS)
+        will_gate = (
+            judge_unavailable
+            or compliance_pass
+            or (new_revision_count >= settings.MAX_REVISIONS)
+        )
+
+        # RAGAS runs ONCE, here, on the draft that is actually going to a human —
+        # not on every revision (that was ~4 LLM calls per loop and exhausted quota).
+        ragas_scores = state.get("ragas_scores") or {}
+        if will_gate and settings.RAGAS_ENABLED and not ragas_scores:
+            sse_events.append("[Compliance] Running RAGAS on final draft…")
+            ragas_scores = await _run_ragas(state, draft)
+            sse_events.append(
+                f"[Compliance] RAGAS — "
+                f"faithfulness: {ragas_scores.get('faithfulness', 0):.2f}, "
+                f"relevancy: {ragas_scores.get('answer_relevancy', 0):.2f}"
+            )
         # Merge violations + judge evidence into metadata so status endpoint
         # can surface them without a DB schema change.
         draft_metadata = dict(state.get("draft_metadata") or {})
@@ -136,7 +193,7 @@ async def compliance_node(state: AgentState) -> AgentState:
                     metadata=draft_metadata,
                     judge_score=judge_score,
                     compliance_pass=compliance_pass,
-                    ragas_scores=state.get("ragas_scores") or {},
+                    ragas_scores=ragas_scores,
                     mlflow_run_id=state.get("mlflow_run_id") or "",
                 ),
             )
@@ -154,8 +211,11 @@ async def compliance_node(state: AgentState) -> AgentState:
             "rule_violations": violations,
             "judge_score": judge_score,
             "judge_evidence": judge_evidence,
+            "judge_unavailable": judge_unavailable,
             "compliance_pass": compliance_pass,
             "revision_count": new_revision_count,
+            "ragas_scores": ragas_scores,
+            "draft_metadata": draft_metadata,
             "errors": errors,
             "sse_events": sse_events,
         }
@@ -166,6 +226,7 @@ async def compliance_node(state: AgentState) -> AgentState:
         return {
             **state,
             "compliance_pass": False,
+            "judge_unavailable": False,
             "rule_violations": [f"Internal error: {exc}"],
             "judge_score": 0.0,
             "judge_evidence": f"error: {exc}",

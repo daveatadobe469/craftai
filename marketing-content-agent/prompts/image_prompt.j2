@@ -1,0 +1,16 @@
+{# [image-based-campaign] Art-direction prompt: brief + draft -> image prompt. #}
+Marketing campaign visual for the brand "{{ brand }}" ({{ channel }} channel).
+
+Core message: {{ key_message }}
+
+Approved copy to reflect visually:
+{{ draft }}
+
+{% if guidelines %}
+Brand guidelines to respect:
+{% for g in guidelines %}- {{ g }}
+{% endfor %}
+{% endif %}
+Art direction: professional, high-quality advertising photography or illustration,
+strong focal subject, clean composition, brand-appropriate colour palette, ample
+negative space for text. Render the campaign headline text legibly within the image.

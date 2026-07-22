@@ -7,6 +7,7 @@ from typing import Any
 import mlflow
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles  # [image-based-campaign]
 
 from config import settings
 from db.sqlite import create_tables
@@ -71,6 +72,11 @@ app.include_router(ingest.router,   prefix="/api/v1", tags=["Ingest"])
 app.include_router(config.router,   prefix="/api/v1", tags=["Config"])
 app.include_router(audit.router,    prefix="/api/v1", tags=["Audit"])
 app.include_router(personas.router, prefix="/api/v1", tags=["Personas"])
+
+
+# [image-based-campaign] Serve generated/uploaded images from the local data dir.
+# URLs are built as {MEDIA_BASE_URL}/media/<subdir>/<brief_id>/<file>.
+app.mount("/media", StaticFiles(directory=settings.data_root), name="media")
 
 
 @app.get("/health", tags=["Health"])

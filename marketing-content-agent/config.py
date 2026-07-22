@@ -42,6 +42,46 @@ class Settings(BaseSettings):
     JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
     CRAG_THRESHOLD: float = Field(default=0.5, ge=0.0, le=1.0)
     MAX_REVISIONS: int = Field(default=3, ge=1, le=10)
+    # RAGAS is the heaviest token consumer (~4 LLM calls per evaluation). It now
+    # runs ONCE on the final draft that reaches the human gate, not per revision.
+    # Set false to skip it entirely (demos / tight API quota).
+    RAGAS_ENABLED: bool = True
+
+    # ── [image-based-campaign] Image feature (input vision + output generation) ─
+    # Master feature flag — when False the pipeline behaves exactly as before:
+    # the vision + art-director nodes become runtime no-ops (graph is unchanged).
+    IMAGE_FEATURE_ENABLED: bool = False
+    # Image OUTPUT (text → image). Cloudflare Workers AI by default (free tier);
+    # switch IMAGE_PROVIDER to "gemini" for legible in-image text at demo quality.
+    IMAGE_PROVIDER: str = "cloudflare"
+    IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    # Gemini image generation (Interactions API) — renders headline text properly.
+    GEMINI_API_KEY: str = ""
+    GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image"
+    IMAGE_ASPECT_RATIO: str = "1:1"
+    IMAGE_SIZE: str = "1K"
+    # Image INPUT (image → text). Groq vision model, reuses the Groq key.
+    VISION_PROVIDER: str = "groq"
+    VISION_MODEL: str = "qwen/qwen3.6-27b"   # only vision-capable model on Groq
+    # Image COMPLIANCE JUDGE — a different vendor from IMAGE_PROVIDER so the model
+    # that generated the image never grades its own output.
+    # OFF by default: Groq's free-tier 8k TPM ceiling can't fit image + reasoning +
+    # JSON answer reliably, so generated images are human-reviewed only.
+    IMAGE_JUDGE_ENABLED: bool = False
+    IMAGE_JUDGE_PROVIDER: str = "groq"
+    IMAGE_JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Image storage backend: "local" (disk, served via the API's /media mount) or
+    # "cloudinary" (CDN-backed, permanent public URLs — needed for a deployed UI).
+    IMAGE_STORAGE_BACKEND: str = "local"
+    MEDIA_BASE_URL: str = "http://localhost:8000"
+    # Cloudinary (only when IMAGE_STORAGE_BACKEND=cloudinary). Uploaded images get
+    # a permanent, publicly-readable CDN URL — no signed-URL expiry to manage.
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+    CLOUDINARY_FOLDER: str = "craftai"
 
     # ── Server ports ──────────────────────────────────────────────────────────
     API_PORT: int = 8000
@@ -61,7 +101,16 @@ class Settings(BaseSettings):
             os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         elif not mlflow_uri.startswith(("http://", "https://")):
             os.makedirs(mlflow_uri, exist_ok=True)
+        # [image-based-campaign] Ensure local image dirs exist (generated + uploads).
+        data_root = os.path.dirname(self.SQLITE_DB_PATH) or "."
+        os.makedirs(os.path.join(data_root, "images"), exist_ok=True)
+        os.makedirs(os.path.join(data_root, "uploads"), exist_ok=True)
         return self
+
+    @property
+    def data_root(self) -> str:
+        # [image-based-campaign] Root dir that holds images/ and uploads/.
+        return os.path.dirname(self.SQLITE_DB_PATH) or "."
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -123,4 +172,30 @@ def get_judge_llm(temperature: float = 0.1):
         model=judge_model,
         temperature=temperature,
         max_tokens=4096,
+    )
+
+
+# [image-based-campaign] Vision LLM factory (image → text description / judging).
+# NOTE: the Groq vision model is a *reasoning* model — it spends tokens on an
+# internal <think> block before answering, so max_tokens must be generous or the
+# reply is truncated before any real output. json_mode forces a parseable object.
+def get_vision_llm(temperature: float = 0.2, max_tokens: int = 2048, json_mode: bool = False):
+    """Return a vision-capable chat model. Groq only; reuses the Groq API key."""
+    if settings.VISION_PROVIDER != "groq":
+        raise ValueError(f"Unsupported VISION_PROVIDER: {settings.VISION_PROVIDER!r}.")
+    if not settings.GROQ_API_KEY:
+        raise ValueError("Vision model needs GROQ_API_KEY.")
+
+    from langchain_groq import ChatGroq
+
+    kwargs: dict = {}
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    return ChatGroq(
+        api_key=settings.GROQ_API_KEY,
+        model=settings.VISION_MODEL,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        model_kwargs=kwargs,
     )

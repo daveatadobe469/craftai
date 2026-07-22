@@ -158,30 +158,21 @@ async def generator_node(state: AgentState) -> AgentState:
         draft_metadata["revision_count"] = revision_count
         draft_metadata["generation_ms"] = generation_ms
 
-        sse_events.append(f"[Generator] Draft generated ({len(draft_text)} chars). Running RAGAS…")
+        sse_events.append(f"[Generator] Draft generated ({len(draft_text)} chars).")
 
-        context_texts = [c["document"] for c in campaigns + guidelines]
-        ragas_scores = await evaluator.evaluate_ragas(
-            question=brief_text,
-            answer=draft_text,
-            contexts=context_texts,
-        )
+        # RAGAS moved out of this node: it cost ~4 LLM calls on EVERY revision,
+        # which exhausted the API token quota and made the judge fail. It now runs
+        # once, in the compliance node, on the draft that reaches the human gate.
+        ragas_scores = state.get("ragas_scores") or {}
 
         try:
             mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
             mlflow.set_experiment("craftai_campaigns")
             with mlflow.start_run(run_name=brief_id, nested=False):
-                mlflow.log_metrics({f"ragas_{k}": v for k, v in ragas_scores.items()})
                 mlflow.log_metric("generation_ms", generation_ms)
                 mlflow.log_metric("revision_count", revision_count)
         except Exception:
             pass
-
-        sse_events.append(
-            f"[Generator] RAGAS scores — "
-            f"faithfulness: {ragas_scores.get('faithfulness', 0):.2f}, "
-            f"relevancy: {ragas_scores.get('answer_relevancy', 0):.2f}"
-        )
 
         return {
             **state,

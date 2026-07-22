@@ -242,6 +242,14 @@ async def get_ollama_models(base_url: str = "http://localhost:11434") -> OllamaM
     )
 
 
+# [image-based-campaign] Expose the image feature flag so the UI can show/hide
+# the image uploader and generated-image panels.
+@router.get("/config/features")
+async def get_features() -> dict[str, bool]:
+    from config import settings as _settings
+    return {"image_feature_enabled": bool(_settings.IMAGE_FEATURE_ENABLED)}
+
+
 @router.get("/config/groq/models", response_model=GroqModelsResponse)
 async def get_groq_models() -> GroqModelsResponse:
     """Return the list of supported Groq models."""

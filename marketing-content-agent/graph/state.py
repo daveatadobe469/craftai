@@ -18,6 +18,19 @@ class AgentState(TypedDict, total=False):
     retrieved_social: list[dict[str, Any]]
     retrieved_guidelines: list[dict[str, Any]]
 
+    # ── [image-based-campaign] Image feature ──────────────────────────────────
+    # Input (image → text): path to an uploaded image + its vision description.
+    input_image_ref: Optional[str]
+    image_description: Optional[str]
+    # Output (text → image): the art-direction prompt + stored image reference.
+    image_prompt: Optional[str]
+    image_path: Optional[str]
+    image_url: Optional[str]
+    # Cross-vendor image compliance judge. Score is None when it could not run.
+    image_judge_score: Optional[float]
+    image_judge_evidence: Optional[str]
+    image_judge_issues: list[str]
+
     # ── Generation ────────────────────────────────────────────────────────────
     draft: str
     draft_metadata: dict[str, Any]
@@ -28,6 +41,9 @@ class AgentState(TypedDict, total=False):
     judge_score: float
     judge_evidence: str
     compliance_pass: bool
+    # True when the LLM judge could not be evaluated (API/rate-limit/parse error).
+    # Fail-open: route straight to the human gate without counting a revision.
+    judge_unavailable: bool
 
     # ── Human gate ────────────────────────────────────────────────────────────
     human_decision: Optional[Literal["approved", "edited", "rejected"]]

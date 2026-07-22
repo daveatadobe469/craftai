@@ -15,5 +15,23 @@ venv/
 data/
 models/
 
+# Credentials — this repo is public. Keep every real secret out of it.
+# .env.example is the ONLY env file that may be committed (see negation below).
+.env
+.env.*
+!.env.example
+*serviceAccount*.json
+*service-account*.json
+*credentials*.json
+*-key.json
+*_key.json
+secrets/
+*.pem
+*.p12
+
 # IDE
 .vscode/
+.idea/
+
+# OS
+.DS_Store
