@@ -9,6 +9,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from api.sse_queues import push_sync
 from config import settings
 from db.sqlite import update_latest_draft_metadata
 from graph.state import AgentState
@@ -63,22 +64,32 @@ async def art_director_node(state: AgentState) -> AgentState:
     sse_events: list[str] = list(state.get("sse_events") or [])
 
     # [image-based-campaign] Skip unless enabled and there is a draft to illustrate.
-    if not settings.IMAGE_FEATURE_ENABLED or not state.get("draft"):
+    # [image-based-campaign] Per-brief switch — the submitter decides whether this
+    # campaign gets a visual. Unchecked means text only: no provider call at all.
+    if not state.get("generate_image", True) or not state.get("draft"):
         return {**state, "errors": errors, "sse_events": sse_events}
 
     try:
         brief_id = state["brief_id"]
         loop = asyncio.get_event_loop()
 
+        # [ring-liveness] Image generation is a ~20s serial call with no step of
+        # its own on the progress ring. Push status live (straight to the SSE
+        # queue) so the trace panel and elapsed clock keep moving instead of going
+        # silent between Compliance and the Human Gate. Live-only, so the node-end
+        # flush does not re-deliver them.
+        def live(msg: str) -> None:
+            push_sync(brief_id, msg)
+
         prompt = _build_image_prompt(state)
-        sse_events.append("[ArtDirector] Generating campaign image…")
+        live("[ArtDirector] Generating campaign image…")
 
         image_bytes = await loop.run_in_executor(None, generate_image, prompt)
         ref = await loop.run_in_executor(
             None, lambda: get_image_store().save(image_bytes, "images", brief_id)
         )
 
-        sse_events.append(f"[ArtDirector] Image ready: {ref.url}")
+        live(f"[ArtDirector] Image ready: {ref.url}")
 
         # [image-based-campaign] Cross-vendor compliance check on the visual.
         extra: dict[str, Any] = {"image_url": ref.url, "image_path": ref.path}
@@ -88,10 +99,10 @@ async def art_director_node(state: AgentState) -> AgentState:
             extra["image_judge_evidence"] = verdict.evidence
             extra["image_judge_issues"] = verdict.issues
             if verdict.unavailable:
-                sse_events.append(f"[ImageJudge] UNAVAILABLE — {verdict.evidence}")
+                live(f"[ImageJudge] UNAVAILABLE — {verdict.evidence}")
             else:
                 passed = verdict.score >= settings.IMAGE_JUDGE_THRESHOLD
-                sse_events.append(
+                live(
                     f"[ImageJudge] Score {verdict.score:.2f} "
                     f"(threshold {settings.IMAGE_JUDGE_THRESHOLD}) — "
                     f"{'PASS' if passed else 'FAIL'}, {len(verdict.issues)} issue(s)."

@@ -37,16 +37,6 @@ def _persona_display_label(persona: dict) -> str:
     return (persona.get("name") or "Unknown persona").strip()
 
 
-def _image_feature_enabled(api_base: str) -> bool:
-    # [image-based-campaign] Ask the API whether the image feature is on.
-    try:
-        r = httpx.get(f"{api_base}/config/features", timeout=5.0)
-        r.raise_for_status()
-        return bool(r.json().get("image_feature_enabled"))
-    except Exception:
-        return False
-
-
 def _fetch_persona_options(api_base: str) -> tuple[list[str], dict[str, str]]:
     """Return persona names and name→display labels from the API."""
     displays: dict[str, str] = {}
@@ -641,7 +631,6 @@ def render() -> None:
 
     api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
     persona_names, persona_displays = _fetch_persona_options(api_base)
-    image_enabled = _image_feature_enabled(api_base)  # [image-based-campaign]
 
     with st.form("brief_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
@@ -677,13 +666,24 @@ def render() -> None:
             help='e.g. {"required_phrases": ["shop now"]}',
         )
         # [image-based-campaign] Optional reference image → campaign (image → text).
-        uploaded_image = None
-        if image_enabled:
-            uploaded_image = st.file_uploader(
-                "Reference Image (optional) — the AI will read it and ground the campaign in it",
-                type=["png", "jpg", "jpeg", "webp"],
-            )
-            st.caption("🖼️ Image feature ON — a campaign image is also generated after review.")
+        uploaded_image = st.file_uploader(
+            "Reference Image (optional) — the AI will read it and ground the campaign in it",
+            type=["png", "jpg", "jpeg", "webp"],
+        )
+        # [image-based-campaign] Per-brief switch for image OUTPUT.
+        # NOTE: this MUST be keyed. An *unkeyed* checkbox the user never toggles
+        # does not commit its `value=True` default to the form on the very FIRST
+        # submit of a freshly-rendered form (Streamlit 1.58), so the first brief
+        # was silently sent with generate_image=False and no image was produced;
+        # every later submit worked. A `key` persists the value in session_state
+        # from the first render, so the first submit reads True correctly.
+        st.session_state.setdefault("gen_image_flag", True)
+        generate_image = st.checkbox(
+            "🖼️  Generate a campaign image",
+            key="gen_image_flag",
+            help="Unchecked returns copy only — no image is generated and no image "
+                 "provider is called. A reference image you upload is still read either way.",
+        )
         submitted = st.form_submit_button(
             "🚀 Submit Brief & Run Pipeline",
             use_container_width=True,
@@ -698,7 +698,7 @@ def render() -> None:
         st.error("Brand name is required.")
         return
     # [image-based-campaign] With a reference image, key message may be derived by vision.
-    has_image = image_enabled and uploaded_image is not None
+    has_image = uploaded_image is not None
     if not has_image and (not key_message.strip() or len(key_message.strip()) < 10):
         st.error("Key message must be at least 10 characters.")
         return
@@ -714,6 +714,7 @@ def render() -> None:
         "persona":     persona,
         "key_message": key_message.strip(),
         "constraints": constraints_dict,
+        "generate_image": generate_image,
     }
 
     # [image-based-campaign] Multipart submit when a reference image was uploaded,
@@ -725,6 +726,7 @@ def render() -> None:
                 "brand": payload["brand"], "channel": payload["channel"],
                 "persona": payload["persona"], "key_message": payload["key_message"],
                 "constraints": json.dumps(constraints_dict),
+                "generate_image": str(generate_image).lower(),
             }
             resp = httpx.post(f"{api_base}/brief/image", data=form, files=files, timeout=30.0)
         else:

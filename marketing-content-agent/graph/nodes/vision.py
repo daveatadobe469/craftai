@@ -21,7 +21,9 @@ async def vision_node(state: AgentState) -> AgentState:
 
     image_ref = state.get("input_image_ref")
     # [image-based-campaign] Skip entirely unless enabled AND an image was provided.
-    if not settings.IMAGE_FEATURE_ENABLED or not image_ref:
+    # [image-based-campaign] Only runs when a reference image was actually uploaded.
+    # Independent of generate_image, which controls image OUTPUT, not input.
+    if not image_ref:
         return {**state, "errors": errors, "sse_events": sse_events}
 
     try:
