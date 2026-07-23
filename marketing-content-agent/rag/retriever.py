@@ -10,12 +10,19 @@ from langchain_core.language_models import BaseChatModel
 from config import settings
 from rag import chroma_client, embedder
 
+# Application-level ceiling on any single LLM call inside retrieval, on top of
+# the client's own request timeout — guards against hangs that happen before
+# the HTTP client's timeout would kick in (e.g. stalled connection-pool wait).
+_LLM_CALL_TIMEOUT_S = 50
+
 
 async def hyde_rewrite(brief_text: str, llm: BaseChatModel) -> str:
     """
     Hypothetical Document Embeddings (HyDE): ask the LLM to write an ideal
     marketing snippet that answers the brief, then embed that snippet.
     Returns the hypothetical document text (the caller embeds it).
+    Falls back to `brief_text` itself if the LLM call times out or errors,
+    so retrieval can still proceed rather than hang.
     """
     prompt = (
         "You are a senior marketing copywriter. "
@@ -24,14 +31,21 @@ async def hyde_rewrite(brief_text: str, llm: BaseChatModel) -> str:
         f"Brief:\n{brief_text}"
     )
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, llm.invoke, prompt)
-    return response.content.strip()
+    try:
+        response = await asyncio.wait_for(
+            loop.run_in_executor(None, llm.invoke, prompt),
+            timeout=_LLM_CALL_TIMEOUT_S,
+        )
+        return response.content.strip()
+    except Exception:
+        return brief_text
 
 
 async def crag_grade(chunk: str, query: str, llm: BaseChatModel) -> float:
     """
     CRAG self-grader: ask the LLM to score the relevance of `chunk` to `query`.
-    Returns a float in [0.0, 1.0]. Defaults to 0.0 on any parse failure.
+    Returns a float in [0.0, 1.0]. Defaults to 0.0 on any parse failure,
+    including a timed-out LLM call.
     """
     prompt = (
         'Rate how relevant the following retrieved passage is to the given query.\n'
@@ -41,14 +55,17 @@ async def crag_grade(chunk: str, query: str, llm: BaseChatModel) -> float:
     )
     loop = asyncio.get_event_loop()
     try:
-        response = await loop.run_in_executor(None, llm.invoke, prompt)
+        response = await asyncio.wait_for(
+            loop.run_in_executor(None, llm.invoke, prompt),
+            timeout=_LLM_CALL_TIMEOUT_S,
+        )
         raw = response.content.strip()
         match = re.search(r'\{.*?"score"\s*:\s*([0-9.]+).*?\}', raw, re.DOTALL)
         if match:
             return float(match.group(1))
         data = json.loads(raw)
         return float(data.get("score", 0.0))
-    except (json.JSONDecodeError, ValueError, AttributeError):
+    except (json.JSONDecodeError, ValueError, AttributeError, asyncio.TimeoutError):
         return 0.0
 
 

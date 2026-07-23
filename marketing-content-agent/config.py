@@ -140,6 +140,8 @@ def get_llm(temperature: float = 0.7):
             model=settings.GROQ_MODEL,
             temperature=temperature,
             max_tokens=4096,
+            timeout=45,
+            max_retries=1,
         )
 
     if settings.LLM_PROVIDER == "ollama":
@@ -150,6 +152,7 @@ def get_llm(temperature: float = 0.7):
             model=settings.OLLAMA_MODEL,
             temperature=temperature,
             num_predict=4096,
+            client_kwargs={"timeout": 90},
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Use 'groq' or 'ollama'.")
@@ -172,6 +175,8 @@ def get_judge_llm(temperature: float = 0.1):
         model=judge_model,
         temperature=temperature,
         max_tokens=4096,
+        timeout=45,
+        max_retries=1,
     )
 
 

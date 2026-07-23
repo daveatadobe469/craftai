@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
+
+# Must be set before sentence_transformers/huggingface_hub import: prevents any
+# network call during model load (version/telemetry checks) that can hang
+# indefinitely on restricted corporate networks, even when the model is
+# already cached locally.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 from sentence_transformers import SentenceTransformer
 
