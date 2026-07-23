@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ui.components.image_review import render_generated_image  # [image-based-campaign]
 from ui.components.progress import inject_progress_css, run_with_progress
@@ -9,6 +10,28 @@ from ui.components.progress import inject_progress_css, run_with_progress
 
 def _compliance_badge(pass_: bool) -> str:
     return "🟢 PASS" if pass_ else "🔴 FAIL"
+
+
+def _render_blog_page_section(api_base: str, brief_id: str) -> None:
+    """Preview + download the blog draft rendered as a responsive HTML page."""
+    st.markdown("### 📰 Blog Page Preview")
+    try:
+        r = httpx.get(f"{api_base}/blog-page/{brief_id}", timeout=15.0)
+        r.raise_for_status()
+        page_html = r.text
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Could not render blog page: {exc}")
+        return
+
+    st.download_button(
+        "⬇️ Download HTML",
+        data=page_html.encode("utf-8"),
+        file_name=f"blog_{brief_id[:8]}.html",
+        mime="text/html",
+        use_container_width=False,
+    )
+    with st.expander("Preview rendered page", expanded=True):
+        components.html(page_html, height=700, scrolling=True)
 
 
 def render() -> None:
@@ -100,6 +123,10 @@ def render() -> None:
 
     status = str(data.get("status", "")).lower()
     can_review = (not human_decision) and bool(draft) and status == "awaiting_review"
+
+    if draft and str(data.get("channel", "")).lower() == "blog":
+        _render_blog_page_section(api_base, brief_id)
+        st.divider()
 
     col_a, col_b = st.columns([2, 1])
 
