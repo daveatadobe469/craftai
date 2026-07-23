@@ -204,7 +204,7 @@ async def test_graph_ainvoke_sets_draft():
              "context_precision": 0.8, "context_recall": 0.8,
          }), \
          patch("graph.nodes.generator.mlflow") as mock_mlflow_gen, \
-         patch("graph.nodes.compliance.get_llm", return_value=mock_judge_llm), \
+         patch("graph.nodes.compliance.get_judge_llm", return_value=mock_judge_llm), \
          patch("graph.nodes.compliance.score_draft", return_value=(0.85, "Good.")), \
          patch("graph.nodes.compliance.mlflow") as mock_mlflow_comp, \
          patch("graph.nodes.compliance.settings") as mock_settings_comp, \

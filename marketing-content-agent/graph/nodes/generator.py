@@ -8,6 +8,7 @@ from typing import Any
 import mlflow
 from jinja2 import Environment, FileSystemLoader
 
+from api.sse_queues import push_sync
 from config import get_llm, settings
 from graph.draft_parser import parse_and_format_draft
 from graph.state import AgentState
@@ -45,6 +46,29 @@ def _char_limit_for_channel(channel: str, persona_profile: dict[str, Any]) -> in
     return int(persona_profile.get(key) or defaults.get(key, 750))
 
 
+# [rag-perf] Do NOT size this down to the channel's character limit. The draft
+# prompt asks for strict JSON and tells the model to count characters before
+# answering, which makes a reasoning model think at length before emitting any
+# content. Measured on gpt-oss-120b: a 1624-token budget returned an EMPTY
+# response for every channel, because reasoning consumed the whole allowance.
+# 4096 is the smallest budget observed to reliably produce a draft.
+_DRAFT_MAX_TOKENS = 4096
+
+
+def _cached_context(
+    state: AgentState,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] | None:
+    """[rag-perf] Return the context a previous revision already retrieved.
+    None when nothing was retrieved yet, so the caller falls back to a real
+    retrieval rather than handing the generator an empty context."""
+    campaigns = state.get("retrieved_campaigns") or []
+    social = state.get("retrieved_social") or []
+    guidelines = state.get("retrieved_guidelines") or []
+    if not campaigns and not social and not guidelines:
+        return None
+    return campaigns, social, guidelines
+
+
 async def generator_node(state: AgentState) -> AgentState:
     """
     Stage 2 — Generator Node
@@ -66,6 +90,14 @@ async def generator_node(state: AgentState) -> AgentState:
         constraints = state.get("constraints") or {}
         revision_count = state.get("revision_count") or 0
         rule_violations = state.get("rule_violations") or []
+
+        # [ring-liveness] Emit progress the instant it happens. LangGraph flushes a
+        # node's sse_events only when the node RETURNS, so the retrieval + draft
+        # work (~10-15s) would otherwise freeze the progress ring on one step.
+        # push_sync goes straight to the live SSE queue; delivered here instead of
+        # the node-end flush, so there is no duplication.
+        def live(msg: str) -> None:
+            push_sync(brief_id, msg)
         persona_profile = constraints.get("persona_profile", {})
 
         brief_text = (
@@ -73,50 +105,67 @@ async def generator_node(state: AgentState) -> AgentState:
             f"Persona: {persona_name}. Key message: {key_message}."
         )
 
-        llm = get_llm(temperature=0.8 if revision_count == 0 else 0.5)
-
-        sse_events.append(f"[Generator] Starting retrieval (revision {revision_count})…")
+        # [rag-perf] Built after char_limit is known so the token budget can be
+        # sized to the channel — see _max_tokens_for_draft.
+        llm = None
 
         loop = asyncio.get_event_loop()
 
-        campaigns = await retrieve_with_hyde(
-            brief_text=brief_text,
-            collection_name=cc.APPROVED_CAMPAIGNS,
-            llm=llm,
-            top_k=5,
-            crag_threshold=settings.CRAG_THRESHOLD,
-        )
+        # [rag-perf] brief_text is derived only from brand/channel/persona/
+        # key_message — none of which change between revisions — so a revision
+        # would retrieve byte-identical chunks at the cost of a full HyDE+CRAG
+        # round trip per collection. Reuse what revision 0 already fetched.
+        cached = _cached_context(state) if revision_count > 0 else None
 
-        social_content: list[dict[str, Any]] = []
-        if channel == "social":
-            social_content = await retrieve_with_hyde(
+        if cached is not None:
+            campaigns, social_content, guidelines = cached
+            live(
+                f"[Generator] Reusing retrieved context (revision {revision_count}) — "
+                "the brief is unchanged, so retrieval is skipped."
+            )
+        else:
+            live(f"[Generator] Starting retrieval (revision {revision_count})…")
+
+            campaigns = await retrieve_with_hyde(
                 brief_text=brief_text,
-                collection_name=cc.SOCIAL_CONTENT,
-                llm=llm,
-                top_k=3,
+                collection_name=cc.APPROVED_CAMPAIGNS,
+                top_k=5,
                 crag_threshold=settings.CRAG_THRESHOLD,
             )
 
-        guidelines_count = await loop.run_in_executor(
-            None, cc.collection_count, cc.BRAND_GUIDELINES
-        )
-        guidelines: list[dict[str, Any]] = []
-        if guidelines_count > 0:
-            guidelines = await retrieve_with_hyde(
-                brief_text=brief_text,
-                collection_name=cc.BRAND_GUIDELINES,
-                llm=llm,
-                top_k=3,
-                crag_threshold=0.3,
-            )
+            social_content: list[dict[str, Any]] = []
+            if channel == "social":
+                social_content = await retrieve_with_hyde(
+                    brief_text=brief_text,
+                    collection_name=cc.SOCIAL_CONTENT,
+                    top_k=3,
+                    crag_threshold=settings.CRAG_THRESHOLD,
+                )
 
-        sse_events.append(
-            f"[Generator] Retrieved {len(campaigns)} campaigns, "
-            f"{len(guidelines)} guidelines, {len(social_content)} social examples."
-        )
+            guidelines_count = await loop.run_in_executor(
+                None, cc.collection_count, cc.BRAND_GUIDELINES
+            )
+            guidelines: list[dict[str, Any]] = []
+            if guidelines_count > 0:
+                guidelines = await retrieve_with_hyde(
+                    brief_text=brief_text,
+                    collection_name=cc.BRAND_GUIDELINES,
+                    top_k=3,
+                    crag_threshold=0.3,
+                )
+
+            live(
+                f"[Generator] Retrieved {len(campaigns)} campaigns, "
+                f"{len(guidelines)} guidelines, {len(social_content)} social examples."
+            )
 
         char_limit = _char_limit_for_channel(channel, persona_profile)
         min_chars = _min_chars_for_channel(channel, char_limit)
+
+        llm = get_llm(
+            temperature=0.8 if revision_count == 0 else 0.5,
+            max_tokens=_DRAFT_MAX_TOKENS,
+        )
 
         template = _jinja_env.get_template(f"{channel}.j2")
         prompt_text = template.render(
@@ -144,7 +193,7 @@ async def generator_node(state: AgentState) -> AgentState:
             rule_violations=rule_violations,
         )
 
-        sse_events.append("[Generator] Calling LLM for draft generation…")
+        live("[Generator] Calling LLM for draft generation…")
         t0 = time.monotonic()
         response = await loop.run_in_executor(None, llm.invoke, prompt_text)
         generation_ms = int((time.monotonic() - t0) * 1000)
@@ -158,7 +207,18 @@ async def generator_node(state: AgentState) -> AgentState:
         draft_metadata["revision_count"] = revision_count
         draft_metadata["generation_ms"] = generation_ms
 
-        sse_events.append(f"[Generator] Draft generated ({len(draft_text)} chars).")
+        # [rag-perf] An empty completion is not a draft. A reasoning model that
+        # spends its whole token budget thinking returns content="" with no API
+        # error, which previously surfaced as a silent "0 chars" draft and sent
+        # nothing downstream. Say so plainly instead.
+        if not (response.content or "").strip():
+            errors.append("Generator returned an empty completion (token budget exhausted?)")
+            live(
+                "[Generator] WARNING: model returned an empty response — "
+                "no content to draft from."
+            )
+
+        live(f"[Generator] Draft generated ({len(draft_text)} chars).")
 
         # RAGAS moved out of this node: it cost ~4 LLM calls on EVERY revision,
         # which exhausted the API token quota and made the judge fail. It now runs

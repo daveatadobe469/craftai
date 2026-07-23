@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-from config import settings
+from config import get_grader_llm, get_retrieval_llm, settings
 from rag import chroma_client, embedder
 
 
@@ -26,6 +26,60 @@ async def hyde_rewrite(brief_text: str, llm: BaseChatModel) -> str:
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(None, llm.invoke, prompt)
     return response.content.strip()
+
+
+def _parse_batch_scores(raw: str, expected: int) -> list[float] | None:
+    """[rag-perf] Pull `expected` floats out of the grader's JSON reply.
+    Returns None when the shape is wrong, so the caller can fall back."""
+    match = re.search(r'\[[^\]]*\]', raw, re.DOTALL)
+    if not match:
+        return None
+    try:
+        scores = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(scores, list) or len(scores) != expected:
+        return None
+    try:
+        return [min(1.0, max(0.0, float(s))) for s in scores]
+    except (TypeError, ValueError):
+        return None
+
+
+async def crag_grade_batch(
+    chunks: list[str], query: str, llm: BaseChatModel
+) -> list[float]:
+    """
+    [rag-perf] Grade every retrieved chunk in ONE LLM call instead of one call
+    per chunk. Identical scoring criteria to crag_grade — the only change is
+    that the query and instructions are sent once rather than N times.
+    Falls back to per-chunk grading if the batched reply is malformed.
+    """
+    if not chunks:
+        return []
+
+    numbered = "\n\n".join(
+        f"[{i}] {chunk}" for i, chunk in enumerate(chunks)
+    )
+    prompt = (
+        "Rate how relevant each numbered passage is to the query.\n"
+        f"Respond with ONLY a JSON array of {len(chunks)} floats between 0.0 and 1.0, "
+        "in the same order as the passages. Example: [0.9, 0.2, 0.7]\n\n"
+        f"Query: {query}\n\n"
+        f"Passages:\n{numbered}"
+    )
+    loop = asyncio.get_event_loop()
+    try:
+        response = await loop.run_in_executor(None, llm.invoke, prompt)
+        scores = _parse_batch_scores(response.content.strip(), len(chunks))
+        if scores is not None:
+            return scores
+    except Exception:  # noqa: BLE001 — fall back to the per-chunk path below
+        pass
+
+    # Malformed batch reply: grade individually rather than silently dropping
+    # every chunk to 0.0, which would strip the generator of all context.
+    return list(await asyncio.gather(*(crag_grade(c, query, llm) for c in chunks)))
 
 
 async def crag_grade(chunk: str, query: str, llm: BaseChatModel) -> float:
@@ -101,7 +155,7 @@ async def retrieve(
 async def retrieve_with_hyde(
     brief_text: str,
     collection_name: str,
-    llm: BaseChatModel,
+    llm: BaseChatModel | None = None,
     top_k: int = 5,
     crag_threshold: float | None = None,
     where: dict[str, Any] | None = None,
@@ -114,8 +168,14 @@ async def retrieve_with_hyde(
     Returns surviving chunks sorted by score descending.
     """
     threshold = crag_threshold if crag_threshold is not None else settings.CRAG_THRESHOLD
+    # [rag-perf] Two different models on purpose: HyDE (write a snippet) runs on
+    # the cheap retrieval model, but batched CRAG grading needs a capable one —
+    # the small model silently drops relevant chunks when grading a batch. A
+    # caller-supplied llm overrides only HyDE; grading always uses the grader.
+    hyde_llm = llm or get_retrieval_llm()
+    grader_llm = get_grader_llm()
 
-    hypo_doc = await hyde_rewrite(brief_text, llm)
+    hypo_doc = await hyde_rewrite(brief_text, hyde_llm)
 
     loop = asyncio.get_event_loop()
     count = await loop.run_in_executor(
@@ -142,8 +202,8 @@ async def retrieve_with_hyde(
     metas = result.get("metadatas", [[]])[0]
     dists = result.get("distances", [[]])[0]
 
-    grade_tasks = [crag_grade(doc, brief_text, llm) for doc in docs]
-    grades = await asyncio.gather(*grade_tasks)
+    # [rag-perf] One grading call for the whole result set, not one per chunk.
+    grades = await crag_grade_batch(docs, brief_text, grader_llm)
 
     chunks: list[dict[str, Any]] = []
     for doc, meta, dist, grade in zip(docs, metas, dists, grades):

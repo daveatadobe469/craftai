@@ -24,6 +24,7 @@ def _build_initial_state(
     persona: str,
     key_message: str,
     constraints: dict[str, Any],
+    generate_image: bool = True,
     input_image_ref: str | None = None,
 ) -> AgentState:
     return {
@@ -54,6 +55,7 @@ def _build_initial_state(
         "errors": [],
         "sse_events": [],
         # [image-based-campaign] Image feature fields.
+        "generate_image": generate_image,
         "input_image_ref": input_image_ref,
         "image_description": None,
         "image_prompt": None,
@@ -85,11 +87,11 @@ async def _run_graph(state: AgentState, q: asyncio.Queue[str], app_queues: dict)
                         or compliance_pass
                         or (revision_count >= settings.MAX_REVISIONS)
                     )
-                    # [image-based-campaign] When the image feature is on, defer the
-                    # gate signal until AFTER art_director stores the image, so the
+                    # [image-based-campaign] When this brief generates an image,
+                    # defer the gate signal until AFTER art_director stores it, so the
                     # review panel loads with the image already present. The human
                     # gate node emits the signal once it runs (post art_director).
-                    if will_gate and not settings.IMAGE_FEATURE_ENABLED:
+                    if will_gate and not node_state.get("generate_image", True):
                         await q.put("__human_action_required__")
 
                 if node_name == "human_gate":
@@ -137,6 +139,7 @@ async def submit_brief(payload: BriefPayload, request: Request) -> BriefResponse
     state = _build_initial_state(
         brief_id, payload.brand, payload.channel, payload.persona,
         payload.key_message, payload.constraints,
+        generate_image=payload.generate_image,
     )
     _start_pipeline(request, brief_id, state)
     return BriefResponse(brief_id=brief_id)
@@ -153,9 +156,8 @@ async def submit_brief_image(
     persona: str = Form(...),
     key_message: str = Form(""),
     constraints: str = Form("{}"),
+    generate_image: bool = Form(True),
 ) -> BriefResponse:
-    if not settings.IMAGE_FEATURE_ENABLED:
-        raise HTTPException(status_code=403, detail="Image feature is disabled (IMAGE_FEATURE_ENABLED).")
 
     try:
         constraints_dict = json.loads(constraints or "{}")
@@ -179,7 +181,7 @@ async def submit_brief_image(
 
     state = _build_initial_state(
         brief_id, brand, channel, persona, key_message, constraints_dict,
-        input_image_ref=ref.path,
+        generate_image=generate_image, input_image_ref=ref.path,
     )
     _start_pipeline(request, brief_id, state)
     return BriefResponse(brief_id=brief_id)

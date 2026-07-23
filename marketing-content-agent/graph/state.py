@@ -19,6 +19,9 @@ class AgentState(TypedDict, total=False):
     retrieved_guidelines: list[dict[str, Any]]
 
     # ── [image-based-campaign] Image feature ──────────────────────────────────
+    # Per-brief choice: does this campaign want a generated visual? Set from the
+    # brief form / API payload. False = the draft comes back as text only.
+    generate_image: bool
     # Input (image → text): path to an uploaded image + its vision description.
     input_image_ref: Optional[str]
     image_description: Optional[str]
