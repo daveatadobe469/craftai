@@ -158,6 +158,7 @@ def get_llm(temperature: float = 0.7, max_tokens: int = 4096):
             temperature=temperature,
             max_tokens=max_tokens,
             request_timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=1,  # from dev: one retry, not two — avoids long 429 backoff stalls
         )
 
     if settings.LLM_PROVIDER == "ollama":
@@ -168,6 +169,7 @@ def get_llm(temperature: float = 0.7, max_tokens: int = 4096):
             model=settings.OLLAMA_MODEL,
             temperature=temperature,
             num_predict=max_tokens,
+            client_kwargs={"timeout": 90},  # from dev: bound the local Ollama call
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Use 'groq' or 'ollama'.")
@@ -189,6 +191,7 @@ def get_retrieval_llm(temperature: float = 0.3, max_tokens: int = 512):
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,
     )
 
 
@@ -213,6 +216,7 @@ def get_grader_llm(temperature: float = 0.0, max_tokens: int = 512):
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,
     )
 
 
@@ -237,6 +241,7 @@ def get_judge_llm(temperature: float = 0.1, max_tokens: int = 1024):
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,  # from dev: one retry, not two — avoids long 429 backoff stalls
     )
 
 
