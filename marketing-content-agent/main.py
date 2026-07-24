@@ -176,6 +176,32 @@ def _shutdown(sig=None, frame=None) -> None:
     sys.exit(0)
 
 
+def _start_email_mcp(py: str, env: dict) -> None:
+    """[mcp-email] Launch the campaign-email MCP server as a subprocess.
+
+    Self-contained: reads its own EMAIL_MCP_* env and stays off the critical path
+    (the app runs fine if it's disabled or fails to bind — the email endpoint just
+    reports it's unreachable). Delete this function + its call to remove the hook.
+    """
+    from mcp_email import settings as email_settings
+
+    if not email_settings.ENABLED:
+        warn("Email MCP server disabled (EMAIL_MCP_ENABLED=0).")
+        return
+    info(f"Starting Email MCP  →  {email_settings.URL}")
+    proc = subprocess.Popen(
+        [py, "-m", "mcp_email.server"],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    _procs.append(proc)
+    _stream(proc, "MAIL", "95")     # magenta
+
+
 def start(api_only: bool = False) -> None:
     env = _venv_env({**os.environ, "PYTHONPATH": str(ROOT)})
 
@@ -184,6 +210,12 @@ def start(api_only: bool = False) -> None:
         ok(f"Using venv interpreter: {py}")
     else:
         warn(f"No project venv found — using {py}. Packages may be missing.")
+
+    # ── Email MCP server ──────────────────────────────────────────────────────
+    # [mcp-email] Campaign email delivery exposed over MCP. CraftAI's API is the
+    # MCP *client*; this is the server. Disable with EMAIL_MCP_ENABLED=0, or remove
+    # this block + the mcp_email/ folder to drop the feature entirely.
+    _start_email_mcp(py, env)
 
     # ── FastAPI ───────────────────────────────────────────────────────────────
     # --reload is OFF by default: uvicorn's reloader respawns its worker via its

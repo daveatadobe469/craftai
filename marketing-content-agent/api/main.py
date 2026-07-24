@@ -90,6 +90,11 @@ app.include_router(audit.router,    prefix="/api/v1", tags=["Audit"])
 app.include_router(personas.router,  prefix="/api/v1", tags=["Personas"])
 app.include_router(blog_page.router, prefix="/api/v1", tags=["Blog Page"])
 
+# [mcp-email] Campaign email over MCP. Remove this block + mcp_email/ to drop it.
+from api.routers import email  # noqa: E402
+
+app.include_router(email.router, prefix="/api/v1", tags=["Email"])
+
 
 # [image-based-campaign] Serve generated/uploaded images from the local data dir.
 # URLs are built as {MEDIA_BASE_URL}/media/<subdir>/<brief_id>/<file>.
