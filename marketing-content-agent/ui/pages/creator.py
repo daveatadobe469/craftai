@@ -356,7 +356,14 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
                     st.warning(v, icon="⚠️")
 
         # ── RAGAS scores ───────────────────────────────────────────────────────
-        if ragas_scores:
+        if ragas_scores.get("not_evaluated"):
+            st.markdown(
+                '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
+                'text-transform:uppercase;margin:12px 0 8px 0;">📊 RAGAS Scores</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Not evaluated — {ragas_scores['not_evaluated']}.")
+        elif ragas_scores:
             st.markdown(
                 '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
                 'text-transform:uppercase;margin:12px 0 8px 0;">📊 RAGAS Scores</div>',

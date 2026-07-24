@@ -38,9 +38,24 @@ def _ragas_contexts(state: AgentState) -> list[str]:
     return [c.get("document", "") for c in retrieved if c.get("document")]
 
 
-async def _run_ragas(state: AgentState, draft: str) -> dict[str, float]:
-    """Single RAGAS evaluation of the draft heading to the human gate."""
+# Sentinel recorded instead of RAGAS scores when there is no retrieved context to
+# ground against — scoring a draft against an empty/placeholder context always
+# yields hard zeros, which reads as a broken metric rather than "not applicable".
+RAGAS_NO_CONTEXT = {"not_evaluated": "no grounding context retrieved"}
+
+
+async def _run_ragas(state: AgentState, draft: str) -> dict[str, Any]:
+    """Single RAGAS evaluation of the draft heading to the human gate.
+
+    Skipped when retrieval returned no context: RAGAS's faithfulness / context
+    metrics are undefined without contexts, so we record a not-evaluated sentinel
+    instead of misleading zeros.
+    """
     from rag import evaluator
+
+    contexts = _ragas_contexts(state)
+    if not contexts:
+        return dict(RAGAS_NO_CONTEXT)
 
     brief_text = (
         f"Brand: {state.get('brand', '')}. Channel: {state.get('channel', '')}. "
@@ -49,7 +64,7 @@ async def _run_ragas(state: AgentState, draft: str) -> dict[str, float]:
     return await evaluator.evaluate_ragas(
         question=brief_text,
         answer=draft,
-        contexts=_ragas_contexts(state),
+        contexts=contexts,
     )
 
 
@@ -234,11 +249,14 @@ async def compliance_node(state: AgentState) -> AgentState:
         if will_gate and settings.RAGAS_ENABLED and not ragas_scores:
             live("[Compliance] Running RAGAS on final draft…")
             ragas_scores = await _run_ragas(state, draft)
-            live(
-                f"[Compliance] RAGAS — "
-                f"faithfulness: {ragas_scores.get('faithfulness', 0):.2f}, "
-                f"relevancy: {ragas_scores.get('answer_relevancy', 0):.2f}"
-            )
+            if "not_evaluated" in ragas_scores:
+                live("[Compliance] RAGAS not evaluated — no grounding context retrieved.")
+            else:
+                live(
+                    f"[Compliance] RAGAS — "
+                    f"faithfulness: {ragas_scores.get('faithfulness', 0):.2f}, "
+                    f"relevancy: {ragas_scores.get('answer_relevancy', 0):.2f}"
+                )
         # Merge violations + judge evidence into metadata so status endpoint
         # can surface them without a DB schema change.
         draft_metadata = dict(state.get("draft_metadata") or {})
