@@ -1,0 +1,28 @@
+services:
+  craftai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: craftai:latest
+    container_name: craftai
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      API_PORT: "8000"
+      UI_PORT: "8501"
+      CHROMA_PERSIST_DIR: "/app/data/chroma"
+      SQLITE_DB_PATH: "/app/data/craftai.db"
+      MLFLOW_TRACKING_URI: "sqlite:////app/data/mlflow.db"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HOME: "/app/.cache/huggingface"
+      TRANSFORMERS_CACHE: "/app/.cache/transformers"
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    command: ["python", "main.py"]
