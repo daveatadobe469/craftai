@@ -171,7 +171,10 @@ def render() -> None:
         else:
             st.success("No rule violations.")
 
-        if ragas_scores:
+        if ragas_scores.get("not_evaluated"):
+            st.markdown("**RAGAS Scores:**")
+            st.info(f"Not evaluated — {ragas_scores['not_evaluated']}.")
+        elif ragas_scores:
             st.markdown("**RAGAS Scores:**")
             for metric, score in ragas_scores.items():
                 st.progress(float(score), text=f"{metric.replace('_', ' ').title()}: {score:.2f}")

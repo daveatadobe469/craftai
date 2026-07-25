@@ -222,15 +222,21 @@ async def retrieve_with_hyde(
     # [rag-perf] One grading call for the whole result set, not one per chunk.
     grades = await crag_grade_batch(docs, brief_text, grader_llm)
 
-    chunks: list[dict[str, Any]] = []
-    for doc, meta, dist, grade in zip(docs, metas, dists, grades):
-        if grade >= threshold:
-            chunks.append({
-                "document": doc,
-                "metadata": meta or {},
-                "distance": dist,
-                "score": grade,
-            })
+    graded: list[dict[str, Any]] = [
+        {"document": doc, "metadata": meta or {}, "distance": dist, "score": grade}
+        for doc, meta, dist, grade in zip(docs, metas, dists, grades)
+    ]
+    chunks = [c for c in graded if c["score"] >= threshold]
+
+    # [rag-perf] Soft floor: if CRAG graded every chunk below threshold, keep the
+    # single best one — as long as it has *some* relevance (score > 0) — so the
+    # generator and the RAGAS evaluator always have a grounding anchor instead of
+    # an empty context. If nothing is even slightly relevant, return empty and let
+    # the caller record RAGAS as not-evaluated rather than scoring against noise.
+    if not chunks and graded:
+        best = max(graded, key=lambda c: c["score"])
+        if best["score"] > 0:
+            chunks = [best]
 
     chunks.sort(key=lambda x: x["score"], reverse=True)
     return chunks
