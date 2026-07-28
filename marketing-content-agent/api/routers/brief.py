@@ -24,6 +24,7 @@ def _build_initial_state(
     persona: str,
     key_message: str,
     constraints: dict[str, Any],
+    campaign_type: str = "general",
     generate_image: bool = True,
     input_image_ref: str | None = None,
 ) -> AgentState:
@@ -33,6 +34,7 @@ def _build_initial_state(
         "channel": channel,
         "persona": persona,
         "key_message": key_message,
+        "campaign_type": campaign_type,
         "constraints": constraints,
         "retrieved_campaigns": [],
         "retrieved_social": [],
@@ -124,21 +126,28 @@ async def submit_brief(payload: BriefPayload, request: Request) -> BriefResponse
     """Accept a text campaign brief and kick off the LangGraph pipeline."""
     brief_id = str(uuid.uuid4())
 
+    # Persist campaign_type inside the constraints JSON blob so it survives
+    # without a DB schema change; the graph reads it from AgentState directly.
+    constraints = dict(payload.constraints or {})
+    constraints.setdefault("campaign_type", payload.campaign_type)
+
     write_brief(
         brief_id=brief_id,
         brand=payload.brand,
         channel=payload.channel,
         persona=payload.persona,
         key_message=payload.key_message,
-        constraints=payload.constraints,
+        constraints=constraints,
     )
     write_audit(brief_id, "brief_submitted", {
         "brand": payload.brand, "channel": payload.channel, "persona": payload.persona,
+        "campaign_type": payload.campaign_type,
     })
 
     state = _build_initial_state(
         brief_id, payload.brand, payload.channel, payload.persona,
-        payload.key_message, payload.constraints,
+        payload.key_message, constraints,
+        campaign_type=payload.campaign_type,
         generate_image=payload.generate_image,
     )
     _start_pipeline(request, brief_id, state)
@@ -155,6 +164,7 @@ async def submit_brief_image(
     channel: str = Form(...),
     persona: str = Form(...),
     key_message: str = Form(""),
+    campaign_type: str = Form("general"),
     constraints: str = Form("{}"),
     generate_image: bool = Form(True),
 ) -> BriefResponse:
@@ -163,6 +173,7 @@ async def submit_brief_image(
         constraints_dict = json.loads(constraints or "{}")
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail="constraints must be valid JSON.")
+    constraints_dict.setdefault("campaign_type", campaign_type)
 
     brief_id = str(uuid.uuid4())
 
@@ -177,10 +188,12 @@ async def submit_brief_image(
     )
     write_audit(brief_id, "brief_submitted", {
         "brand": brand, "channel": channel, "persona": persona, "input_image": ref.url,
+        "campaign_type": campaign_type,
     })
 
     state = _build_initial_state(
         brief_id, brand, channel, persona, key_message, constraints_dict,
+        campaign_type=campaign_type,
         generate_image=generate_image, input_image_ref=ref.path,
     )
     _start_pipeline(request, brief_id, state)
