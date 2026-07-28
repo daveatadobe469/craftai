@@ -17,6 +17,11 @@ class BriefPayload(BaseModel):
     constraints: dict[str, Any] = Field(
         default_factory=dict, description="Optional extra constraints (e.g. required phrases, allowed domains)"
     )
+    # [image-based-campaign] Per-brief switch. False returns text-only copy and
+    # skips image generation entirely — no provider call, no storage write.
+    generate_image: bool = Field(
+        default=True, description="Generate a campaign image alongside the copy"
+    )
 
     @model_validator(mode="after")
     def _strip_whitespace(self) -> BriefPayload:

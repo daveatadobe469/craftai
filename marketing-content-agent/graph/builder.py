@@ -17,7 +17,7 @@ def build_graph():
     Construct and compile the CRAFTAI LangGraph state machine.
 
     Pipeline ([image-based-campaign] adds vision + art_director; both are runtime
-    no-ops when IMAGE_FEATURE_ENABLED is false, so the text-only flow is unchanged):
+    no-ops when the brief has no uploaded image / generate_image is false):
         START
           → vision            (image → text, no-op if no image)
           → orchestrator

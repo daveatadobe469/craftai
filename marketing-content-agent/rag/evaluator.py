@@ -110,7 +110,10 @@ def _build_ragas_llm():
     """Use the same provider as the rest of CRAFTAI (Groq or Ollama)."""
     if settings.LLM_PROVIDER == "groq" and not settings.GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY is required for RAGAS when LLM_PROVIDER=groq.")
-    return get_llm(temperature=0)
+    # [rag-perf] RAGAS fires ~4 calls back to back and each emits only short
+    # structured output. Asking for the generator's 4096-token budget reserved
+    # 16k tokens against an 8k/min ceiling, so every run throttled itself.
+    return get_llm(temperature=0, max_tokens=1024)
 
 
 async def evaluate_ragas(

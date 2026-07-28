@@ -24,6 +24,22 @@ async def lifespan(app: FastAPI):
 
     init_collections()
 
+    # Warm the embedding model now, at boot, instead of lazily on the first
+    # live brief. The first import/load of sentence-transformers can stall
+    # for minutes on some machines (AV scanning / cold import cost) — paying
+    # that cost here makes it visible in the startup log instead of hanging
+    # a user's pipeline run mid-request.
+    import time
+    print("[Startup] Warming embedding model…", flush=True)
+    t0 = time.monotonic()
+    try:
+        loop = asyncio.get_event_loop()
+        from rag import embedder
+        await loop.run_in_executor(None, embedder.get_model)
+        print(f"[Startup] Embedding model ready in {time.monotonic() - t0:.1f}s", flush=True)
+    except Exception as exc:
+        print(f"[Startup] Embedding model warm-up failed after {time.monotonic() - t0:.1f}s: {exc}", flush=True)
+
     try:
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
         mlflow.set_experiment("craftai_campaigns")
@@ -61,7 +77,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from api.routers import audit, brief, config, decision, ingest, personas, search, status, stream
+from api.routers import audit, blog_page, brief, config, decision, ingest, personas, search, status, stream
 
 app.include_router(brief.router,    prefix="/api/v1", tags=["Brief"])
 app.include_router(status.router,   prefix="/api/v1", tags=["Status"])
@@ -71,7 +87,13 @@ app.include_router(stream.router,   prefix="/api/v1", tags=["Stream"])
 app.include_router(ingest.router,   prefix="/api/v1", tags=["Ingest"])
 app.include_router(config.router,   prefix="/api/v1", tags=["Config"])
 app.include_router(audit.router,    prefix="/api/v1", tags=["Audit"])
-app.include_router(personas.router, prefix="/api/v1", tags=["Personas"])
+app.include_router(personas.router,  prefix="/api/v1", tags=["Personas"])
+app.include_router(blog_page.router, prefix="/api/v1", tags=["Blog Page"])
+
+# [mcp-email] Campaign email over MCP. Remove this block + mcp_email/ to drop it.
+from api.routers import email  # noqa: E402
+
+app.include_router(email.router, prefix="/api/v1", tags=["Email"])
 
 
 # [image-based-campaign] Serve generated/uploaded images from the local data dir.

@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     JUDGE_GROQ_MODEL: str = ""
     JUDGE_GROQ_API_KEY: str = ""
 
+    # [rag-perf] HyDE-rewrite LLM. A cheap fast model is enough for "write a
+    # snippet", and it gives that step its own per-model daily budget so it does
+    # not starve the generator. Empty = reuse GROQ_MODEL (old behaviour).
+    RETRIEVAL_GROQ_MODEL: str = "llama-3.1-8b-instant"
+    # [rag-perf] Batched CRAG grading LLM. Empty = reuse GROQ_MODEL. Do NOT set
+    # this to a small model: batched multi-passage grading needs a capable one
+    # (the 8b model silently drops relevant chunks when grading in a batch —
+    # see get_grader_llm and the 2x2 comparison note).
+    CRAG_GROQ_MODEL: str = ""
+
     # ── Embeddings ────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
@@ -41,6 +51,10 @@ class Settings(BaseSettings):
     # ── Agent thresholds ──────────────────────────────────────────────────────
     JUDGE_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
     CRAG_THRESHOLD: float = Field(default=0.5, ge=0.0, le=1.0)
+    # [rag-perf] Per-request LLM timeout, seconds. langchain_groq overrides the
+    # Groq SDK's own 60s read timeout with None, so without this a single stalled
+    # connection hangs the whole pipeline indefinitely (and then retries twice).
+    LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0.0)
     MAX_REVISIONS: int = Field(default=3, ge=1, le=10)
     # RAGAS is the heaviest token consumer (~4 LLM calls per evaluation). It now
     # runs ONCE on the final draft that reaches the human gate, not per revision.
@@ -48,9 +62,8 @@ class Settings(BaseSettings):
     RAGAS_ENABLED: bool = True
 
     # ── [image-based-campaign] Image feature (input vision + output generation) ─
-    # Master feature flag — when False the pipeline behaves exactly as before:
-    # the vision + art-director nodes become runtime no-ops (graph is unchanged).
-    IMAGE_FEATURE_ENABLED: bool = False
+    # Whether a brief gets a generated image is a PER-BRIEF choice (generate_image
+    # on the brief payload / the checkbox in the brief form), not a global flag.
     # Image OUTPUT (text → image). Cloudflare Workers AI by default (free tier);
     # switch IMAGE_PROVIDER to "gemini" for legible in-image text at demo quality.
     IMAGE_PROVIDER: str = "cloudflare"
@@ -125,7 +138,11 @@ def get_settings() -> Settings:
 settings: Settings = get_settings()
 
 
-def get_llm(temperature: float = 0.7):
+# [rag-perf] max_tokens is not just a cap — Groq counts the REQUESTED budget
+# against the per-minute limit, so an oversized value throttles the whole
+# pipeline. gpt-oss-120b allows only 8k TPM, i.e. two 4096-token requests per
+# minute. Callers that produce short output should ask for less.
+def get_llm(temperature: float = 0.7, max_tokens: int = 4096):
     """Factory that returns a configured LangChain chat model."""
     if settings.LLM_PROVIDER == "groq":
         if not settings.GROQ_API_KEY:
@@ -139,7 +156,9 @@ def get_llm(temperature: float = 0.7):
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
             temperature=temperature,
-            max_tokens=4096,
+            max_tokens=max_tokens,
+            request_timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=1,  # from dev: one retry, not two — avoids long 429 backoff stalls
         )
 
     if settings.LLM_PROVIDER == "ollama":
@@ -149,13 +168,62 @@ def get_llm(temperature: float = 0.7):
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
             temperature=temperature,
-            num_predict=4096,
+            num_predict=max_tokens,
+            client_kwargs={"timeout": 90},  # from dev: bound the local Ollama call
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Use 'groq' or 'ollama'.")
 
 
-def get_judge_llm(temperature: float = 0.1):
+# [rag-perf] LLM for the HyDE rewrite only — "write a marketing snippet", a
+# simple generation task the small fast model handles well, and it keeps the
+# generator model's daily quota free. NOT used for CRAG grading (see below).
+# max_tokens is capped low: this call has no reason to run long.
+def get_retrieval_llm(temperature: float = 0.3, max_tokens: int = 512):
+    if settings.LLM_PROVIDER != "groq" or not settings.RETRIEVAL_GROQ_MODEL:
+        return get_llm(temperature=temperature)
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        api_key=settings.GROQ_API_KEY,
+        model=settings.RETRIEVAL_GROQ_MODEL,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
+
+
+# [rag-perf] LLM for BATCHED CRAG grading — score every retrieved passage in one
+# call. Measured (2x2 harness, 2026-07-23): the small 8b model grades passages
+# correctly one at a time but collapses their scores when asked to grade several
+# in a single batched call (skincare brief: kept 1/3 relevant chunks vs 3/3 on
+# the generator model). Batched grading needs a capable model. Defaults to the
+# generator model — exactly where CRAG graded before the perf refactor — so this
+# restores original grading quality while keeping the single-call perf win.
+# Grading is one call per collection (2–3 per brief), so quota impact is small.
+def get_grader_llm(temperature: float = 0.0, max_tokens: int = 512):
+    model = settings.CRAG_GROQ_MODEL or settings.GROQ_MODEL
+    if settings.LLM_PROVIDER != "groq":
+        return get_llm(temperature=temperature)
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        api_key=settings.GROQ_API_KEY,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
+
+
+# [rag-perf] The judge emits a small JSON verdict, and RAGAS emits short
+# structured fragments — neither needs the generator's full budget. Keeping this
+# low is what lets several evaluation calls fit inside one TPM window.
+def get_judge_llm(temperature: float = 0.1, max_tokens: int = 1024):
     """LLM used for evaluation (LLM-as-judge + RAGAS).
     Falls back to the generator model when no judge model is configured.
     Currently Groq only."""
@@ -171,7 +239,9 @@ def get_judge_llm(temperature: float = 0.1):
         api_key=judge_api_key,
         model=judge_model,
         temperature=temperature,
-        max_tokens=4096,
+        max_tokens=max_tokens,
+        request_timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,  # from dev: one retry, not two — avoids long 429 backoff stalls
     )
 
 
@@ -198,4 +268,5 @@ def get_vision_llm(temperature: float = 0.2, max_tokens: int = 2048, json_mode: 
         temperature=temperature,
         max_tokens=max_tokens,
         model_kwargs=kwargs,
+        request_timeout=settings.LLM_TIMEOUT_SECONDS,
     )

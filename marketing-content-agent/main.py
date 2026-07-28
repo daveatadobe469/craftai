@@ -22,6 +22,52 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 
+# Windows consoles often default to cp1252, which can't encode the box-drawing
+# and status characters (╔ ✓ ⚠ ✗) used below — force UTF-8 so the banner and
+# status lines don't crash the launcher before anything else even starts.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# ── Interpreter resolution ────────────────────────────────────────────────────
+# Do NOT trust sys.executable to launch subprocesses. On Windows a
+# virtualenv-created `venv\Scripts\python.exe` is a launcher stub that delegates
+# to the base interpreter, so sys.executable inside a running script can report
+# the *system* Python — spawning uvicorn/streamlit with that bypasses the venv's
+# packages (torch, sentence-transformers, langchain-groq) and the app hangs /
+# fails mid-pipeline. Resolve the project venv interpreter explicitly instead.
+
+def _find_venv_dir() -> Path | None:
+    for d in (ROOT / "venv", ROOT / ".venv"):
+        if (d / "Scripts" / "python.exe").exists() or (d / "bin" / "python").exists():
+            return d
+    return None
+
+
+_VENV_DIR = _find_venv_dir()
+
+
+def _venv_python() -> str:
+    """Absolute path to the project venv's Python; falls back to sys.executable."""
+    if _VENV_DIR:
+        win = _VENV_DIR / "Scripts" / "python.exe"
+        posix = _VENV_DIR / "bin" / "python"
+        return str(win if win.exists() else posix)
+    return sys.executable
+
+
+def _venv_env(base: dict) -> dict:
+    """Env that mimics `activate` so subprocesses (incl. uvicorn --reload
+    workers) resolve to the venv regardless of how they respawn."""
+    env = dict(base)
+    if _VENV_DIR:
+        scripts = _VENV_DIR / ("Scripts" if os.name == "nt" else "bin")
+        env["VIRTUAL_ENV"] = str(_VENV_DIR)
+        env["PATH"] = str(scripts) + os.pathsep + env.get("PATH", "")
+        env.pop("PYTHONHOME", None)
+    return env
+
+
 # ── ANSI colours ─────────────────────────────────────────────────────────────
 _TTY = sys.stdout.isatty()
 
@@ -87,12 +133,14 @@ def seed_if_needed() -> None:
     info("First run — seeding ChromaDB + SQLite (may take ~30 s)…")
     try:
         subprocess.check_call(
-            [sys.executable, str(ROOT / "scripts" / "init_chroma.py")],
+            [_venv_python(), str(ROOT / "scripts" / "init_chroma.py")],
             cwd=str(ROOT),
+            env=_venv_env({**os.environ, "PYTHONPATH": str(ROOT)}),
         )
         subprocess.check_call(
-            [sys.executable, str(ROOT / "scripts" / "generate_guidelines.py")],
+            [_venv_python(), str(ROOT / "scripts" / "generate_guidelines.py")],
             cwd=str(ROOT),
+            env=_venv_env({**os.environ, "PYTHONPATH": str(ROOT)}),
         )
         ok("Knowledge base seeded.")
     except subprocess.CalledProcessError as exc:
@@ -128,19 +176,66 @@ def _shutdown(sig=None, frame=None) -> None:
     sys.exit(0)
 
 
+def _start_email_mcp(py: str, env: dict) -> None:
+    """[mcp-email] Launch the campaign-email MCP server as a subprocess.
+
+    Self-contained: reads its own EMAIL_MCP_* env and stays off the critical path
+    (the app runs fine if it's disabled or fails to bind — the email endpoint just
+    reports it's unreachable). Delete this function + its call to remove the hook.
+    """
+    from mcp_email import settings as email_settings
+
+    if not email_settings.ENABLED:
+        warn("Email MCP server disabled (EMAIL_MCP_ENABLED=0).")
+        return
+    info(f"Starting Email MCP  →  {email_settings.URL}")
+    proc = subprocess.Popen(
+        [py, "-m", "mcp_email.server"],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    _procs.append(proc)
+    _stream(proc, "MAIL", "95")     # magenta
+
+
 def start(api_only: bool = False) -> None:
-    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    env = _venv_env({**os.environ, "PYTHONPATH": str(ROOT)})
+
+    py = _venv_python()
+    if _VENV_DIR:
+        ok(f"Using venv interpreter: {py}")
+    else:
+        warn(f"No project venv found — using {py}. Packages may be missing.")
+
+    # ── Email MCP server ──────────────────────────────────────────────────────
+    # [mcp-email] Campaign email delivery exposed over MCP. CraftAI's API is the
+    # MCP *client*; this is the server. Disable with EMAIL_MCP_ENABLED=0, or remove
+    # this block + the mcp_email/ folder to drop the feature entirely.
+    _start_email_mcp(py, env)
 
     # ── FastAPI ───────────────────────────────────────────────────────────────
+    # --reload is OFF by default: uvicorn's reloader respawns its worker via its
+    # own interpreter resolution, which on a venv-stub Windows setup lands the
+    # worker back on the *system* Python (missing torch/sentence-transformers),
+    # hanging the pipeline at retrieval. Without --reload the process we launch
+    # here (explicit venv Python) IS the server. Opt back in with CRAFTAI_RELOAD=1.
+    uvicorn_cmd = [
+        py, "-m", "uvicorn",
+        "api.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+    ]
+    if os.environ.get("CRAFTAI_RELOAD") == "1":
+        uvicorn_cmd.append("--reload")
+        warn("CRAFTAI_RELOAD=1 — auto-reload on; worker may use the wrong interpreter on venv-stub setups.")
+
     info("Starting FastAPI  →  http://localhost:8000   (docs: /docs)")
     api = subprocess.Popen(
-        [
-            sys.executable, "-m", "uvicorn",
-            "api.main:app",
-            "--host", "0.0.0.0",
-            "--port", "8000",
-            "--reload",
-        ],
+        uvicorn_cmd,
         cwd=str(ROOT),
         env=env,
         stdout=subprocess.PIPE,
@@ -158,7 +253,7 @@ def start(api_only: bool = False) -> None:
         info("Starting Streamlit  →  http://localhost:8501")
         ui = subprocess.Popen(
             [
-                sys.executable, "-m", "streamlit",
+                py, "-m", "streamlit",
                 "run", str(ROOT / "ui" / "app.py"),
                 "--server.port", "8501",
                 "--server.address", "0.0.0.0",

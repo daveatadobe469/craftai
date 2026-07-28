@@ -7,6 +7,7 @@ from typing import Literal
 
 import httpx
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ui.components.image_review import render_generated_image  # [image-based-campaign]
 from ui.components.progress import (
@@ -34,16 +35,6 @@ _FALLBACK_PERSONA_DISPLAY: dict[str, str] = {name: name for name in _FALLBACK_PE
 def _persona_display_label(persona: dict) -> str:
     """Selectbox label — friendly persona name only."""
     return (persona.get("name") or "Unknown persona").strip()
-
-
-def _image_feature_enabled(api_base: str) -> bool:
-    # [image-based-campaign] Ask the API whether the image feature is on.
-    try:
-        r = httpx.get(f"{api_base}/config/features", timeout=5.0)
-        r.raise_for_status()
-        return bool(r.json().get("image_feature_enabled"))
-    except Exception:
-        return False
 
 
 def _fetch_persona_options(api_base: str) -> tuple[list[str], dict[str, str]]:
@@ -335,6 +326,10 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
         # [image-based-campaign] Generated image + its compliance verdict.
         render_generated_image(draft_data.get("draft_metadata"))
 
+        # Blog channel: offer the responsive HTML page (preview + download).
+        if channel == "BLOG" and draft:
+            _render_blog_page_section(api_base, brief_id)
+
     with right_col:
         # ── Compliance summary ─────────────────────────────────────────────────
         st.markdown(
@@ -361,7 +356,14 @@ def _render_review_panel(api_base: str, brief_id: str) -> None:
                     st.warning(v, icon="⚠️")
 
         # ── RAGAS scores ───────────────────────────────────────────────────────
-        if ragas_scores:
+        if ragas_scores.get("not_evaluated"):
+            st.markdown(
+                '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
+                'text-transform:uppercase;margin:12px 0 8px 0;">📊 RAGAS Scores</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Not evaluated — {ragas_scores['not_evaluated']}.")
+        elif ragas_scores:
             st.markdown(
                 '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
                 'text-transform:uppercase;margin:12px 0 8px 0;">📊 RAGAS Scores</div>',
@@ -459,6 +461,33 @@ def _poll_pipeline_terminal(api_base: str, brief_id: str, max_seconds: int = 120
             pass
         time.sleep(2)
     return None
+
+
+def _render_blog_page_section(api_base: str, brief_id: str) -> None:
+    """Preview + download the blog draft rendered as a responsive HTML page.
+    Shown only for the 'blog' channel."""
+    st.markdown(
+        '<div style="font-size:0.72rem;color:#00d4ff;letter-spacing:2px;'
+        'text-transform:uppercase;margin:14px 0 8px;">📰 Blog Page (HTML)</div>',
+        unsafe_allow_html=True,
+    )
+    try:
+        r = httpx.get(f"{api_base}/blog-page/{brief_id}", timeout=15.0)
+        r.raise_for_status()
+        page_html = r.text
+    except Exception as exc:  # noqa: BLE001
+        st.info(f"Blog HTML page not available yet: {exc}")
+        return
+
+    st.download_button(
+        "⬇️ Download HTML page",
+        data=page_html.encode("utf-8"),
+        file_name=f"blog_{brief_id[:8]}.html",
+        mime="text/html",
+        use_container_width=True,
+    )
+    with st.expander("Preview rendered blog page", expanded=True):
+        components.html(page_html, height=600, scrolling=True)
 
 
 def _submit_decision(
@@ -609,7 +638,6 @@ def render() -> None:
 
     api_base = st.session_state.get("api_base", "http://localhost:8000/api/v1")
     persona_names, persona_displays = _fetch_persona_options(api_base)
-    image_enabled = _image_feature_enabled(api_base)  # [image-based-campaign]
 
     with st.form("brief_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
@@ -645,13 +673,24 @@ def render() -> None:
             help='e.g. {"required_phrases": ["shop now"]}',
         )
         # [image-based-campaign] Optional reference image → campaign (image → text).
-        uploaded_image = None
-        if image_enabled:
-            uploaded_image = st.file_uploader(
-                "Reference Image (optional) — the AI will read it and ground the campaign in it",
-                type=["png", "jpg", "jpeg", "webp"],
-            )
-            st.caption("🖼️ Image feature ON — a campaign image is also generated after review.")
+        uploaded_image = st.file_uploader(
+            "Reference Image (optional) — the AI will read it and ground the campaign in it",
+            type=["png", "jpg", "jpeg", "webp"],
+        )
+        # [image-based-campaign] Per-brief switch for image OUTPUT.
+        # NOTE: this MUST be keyed. An *unkeyed* checkbox the user never toggles
+        # does not commit its `value=True` default to the form on the very FIRST
+        # submit of a freshly-rendered form (Streamlit 1.58), so the first brief
+        # was silently sent with generate_image=False and no image was produced;
+        # every later submit worked. A `key` persists the value in session_state
+        # from the first render, so the first submit reads True correctly.
+        st.session_state.setdefault("gen_image_flag", True)
+        generate_image = st.checkbox(
+            "🖼️  Generate a campaign image",
+            key="gen_image_flag",
+            help="Unchecked returns copy only — no image is generated and no image "
+                 "provider is called. A reference image you upload is still read either way.",
+        )
         submitted = st.form_submit_button(
             "🚀 Submit Brief & Run Pipeline",
             use_container_width=True,
@@ -666,7 +705,7 @@ def render() -> None:
         st.error("Brand name is required.")
         return
     # [image-based-campaign] With a reference image, key message may be derived by vision.
-    has_image = image_enabled and uploaded_image is not None
+    has_image = uploaded_image is not None
     if not has_image and (not key_message.strip() or len(key_message.strip()) < 10):
         st.error("Key message must be at least 10 characters.")
         return
@@ -682,6 +721,7 @@ def render() -> None:
         "persona":     persona,
         "key_message": key_message.strip(),
         "constraints": constraints_dict,
+        "generate_image": generate_image,
     }
 
     # [image-based-campaign] Multipart submit when a reference image was uploaded,
@@ -693,6 +733,7 @@ def render() -> None:
                 "brand": payload["brand"], "channel": payload["channel"],
                 "persona": payload["persona"], "key_message": payload["key_message"],
                 "constraints": json.dumps(constraints_dict),
+                "generate_image": str(generate_image).lower(),
             }
             resp = httpx.post(f"{api_base}/brief/image", data=form, files=files, timeout=30.0)
         else:
