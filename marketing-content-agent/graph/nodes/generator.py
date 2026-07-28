@@ -34,41 +34,6 @@ def _min_chars_for_channel(channel: str, char_limit: int) -> int:
     return max(280, int(char_limit * 0.65))
 
 
-# Per-campaign-type framing injected into channel prompts. "general" adds no
-# extra directive (backward-compatible default).
-_CAMPAIGN_GUIDANCE: dict[str, str] = {
-    "general": "",
-    "promotional": (
-        "This is a PROMOTIONAL campaign: lead with a compelling offer or benefit "
-        "and drive urgency toward a single clear action — without banned scarcity phrasing."
-    ),
-    "product_launch": (
-        "This is a PRODUCT LAUNCH: introduce the product by name, highlight 2-3 concrete "
-        "differentiators, and cite specific, evidence-backed proof points from the context."
-    ),
-    "newsletter": (
-        "This is a NEWSLETTER: adopt an informative, value-first tone with multiple short "
-        "highlights rather than one hard sell; keep CTAs soft and helpful."
-    ),
-    "re_engagement": (
-        "This is a RE-ENGAGEMENT/WIN-BACK campaign: acknowledge the lapsed relationship warmly, "
-        "remind the reader of the value they are missing, and give one low-friction reason to return."
-    ),
-    "announcement": (
-        "This is an ANNOUNCEMENT: communicate the news clearly and concisely up front, "
-        "explain why it matters to this persona, then point to where they can learn more."
-    ),
-    "seasonal": (
-        "This is a SEASONAL campaign: tie the message to the relevant season/occasion "
-        "naturally and keep the tone timely, without artificial countdown pressure."
-    ),
-}
-
-
-def _campaign_guidance(campaign_type: str) -> str:
-    return _CAMPAIGN_GUIDANCE.get((campaign_type or "general").lower(), "")
-
-
 def _char_limit_for_channel(channel: str, persona_profile: dict[str, Any]) -> int:
     key = f"char_limit_{channel.lower()}"
     defaults = {
@@ -125,11 +90,6 @@ async def generator_node(state: AgentState) -> AgentState:
         constraints = state.get("constraints") or {}
         revision_count = state.get("revision_count") or 0
         rule_violations = state.get("rule_violations") or []
-        campaign_type = (
-            state.get("campaign_type")
-            or constraints.get("campaign_type")
-            or "general"
-        )
 
         # [ring-liveness] Emit progress the instant it happens. LangGraph flushes a
         # node's sse_events only when the node RETURNS, so the retrieval + draft
@@ -211,8 +171,6 @@ async def generator_node(state: AgentState) -> AgentState:
         prompt_text = template.render(
             channel=channel,
             brand=brand,
-            campaign_type=campaign_type,
-            campaign_guidance=_campaign_guidance(campaign_type),
             persona=persona_name,
             persona_description=persona_profile.get("description", ""),
             key_message=key_message,

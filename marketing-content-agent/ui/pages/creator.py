@@ -655,24 +655,12 @@ def render() -> None:
                     "blog":     "📝 Blog Post",
                 }[x],
             )
-        col3, col4 = st.columns(2)
-        with col3:
-            persona = st.selectbox(
-                "Target Persona *",
-                options=persona_names,
-                format_func=lambda n: persona_displays.get(n, n),
-                help="Audience segment with age range and spend profile — pick the best match for your campaign.",
-            )
-        with col4:
-            campaign_type = st.selectbox(
-                "Campaign Type",
-                options=[
-                    "general", "promotional", "product_launch",
-                    "newsletter", "re_engagement", "announcement", "seasonal",
-                ],
-                format_func=lambda x: x.replace("_", " ").title(),
-                help="Shapes how the content is framed (e.g. Product Launch, Re-engagement).",
-            )
+        persona = st.selectbox(
+            "Target Persona *",
+            options=persona_names,
+            format_func=lambda n: persona_displays.get(n, n),
+            help="Audience segment with age range and spend profile — pick the best match for your campaign.",
+        )
         key_message = st.text_area(
             "Key Message *",
             placeholder="What is the core message? (min 10 characters)",
@@ -728,12 +716,11 @@ def render() -> None:
         return
 
     payload = {
-        "brand":         brand.strip(),
-        "channel":       channel,
-        "persona":       persona,
-        "key_message":   key_message.strip(),
-        "campaign_type": campaign_type,
-        "constraints":   constraints_dict,
+        "brand":       brand.strip(),
+        "channel":     channel,
+        "persona":     persona,
+        "key_message": key_message.strip(),
+        "constraints": constraints_dict,
         "generate_image": generate_image,
     }
 
@@ -745,7 +732,6 @@ def render() -> None:
             form = {
                 "brand": payload["brand"], "channel": payload["channel"],
                 "persona": payload["persona"], "key_message": payload["key_message"],
-                "campaign_type": payload["campaign_type"],
                 "constraints": json.dumps(constraints_dict),
                 "generate_image": str(generate_image).lower(),
             }

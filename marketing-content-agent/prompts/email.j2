@@ -2,16 +2,10 @@ You are an expert email marketing copywriter for {{ brand }}.
 
 ## Campaign Brief
 - **Channel**: Email
-- **Campaign Type**: {{ campaign_type | default("general") }}
 - **Target Persona**: {{ persona }} — {{ persona_description }}
 - **Key Message**: {{ key_message }}
 - **Tone**: {{ preferred_tone }}
-- **Character Limit**: {{ char_limit_email }} characters (email body only, max {{ max_chars }})
-
-{% if campaign_guidance %}
-## Campaign Directive
-{{ campaign_guidance }}
-{% endif %}
+- **Character Limit**: {{ char_limit_email }} characters (body only, max {{ max_chars }})
 
 {% include "_quality.j2" %}
 
@@ -52,27 +46,13 @@ The previous draft had the following compliance issues. Fix ALL of them:
 Return **one JSON object only** — no markdown code fences, no preamble, no bullet list, no explanation after the JSON.
 
 Rules for valid JSON:
-- Escape line breaks inside any string as `\n` (do not use literal newlines inside quoted strings).
-- Ground every factual claim in the brief, guidelines, or approved examples above — do NOT invent product names, statistics, or clinical results.
-- The email body (`body_intro` + `benefits` + `body_close` combined) must be **{{ min_chars }}–{{ max_chars }} characters** (count before responding).
-- `footer.unsubscribe_text` and `footer.sender_name` are REQUIRED for legal compliance (CAN-SPAM/GDPR).
+- Escape line breaks inside `body` as `\n` (do not use literal newlines inside quoted strings).
+- The `body` field must be **{{ min_chars }}–{{ max_chars }} characters** (count before responding).
 
 ```json
 {
-  "subject": "<compelling subject line, 40-60 chars>",
-  "preheader": "<inbox preview text that complements the subject, max 120 chars>",
-  "body_intro": "<opening paragraph that hooks the persona, uses \\n for breaks>",
-  "benefits": [
-    "<concrete benefit 1 tied to a persona pain point, grounded in context>",
-    "<concrete benefit 2>",
-    "<concrete benefit 3 (optional)>"
-  ],
-  "body_close": "<closing paragraph that reinforces the value and leads into the CTA>",
-  "cta": "<primary call-to-action button text, max 30 chars>",
-  "secondary_cta": "<optional secondary action, max 30 chars, or empty string>",
-  "footer": {
-    "sender_name": "{{ brand }}",
-    "unsubscribe_text": "Unsubscribe"
-  }
+  "subject": "<compelling email subject line, max 60 chars>",
+  "body": "<email body with \\n for paragraph breaks, {{ min_chars }}-{{ max_chars }} chars total>",
+  "cta": "<clear call-to-action button text, max 30 chars>"
 }
 ```

@@ -67,12 +67,9 @@ class Settings(BaseSettings):
     # Image OUTPUT (text → image). Cloudflare Workers AI by default (free tier);
     # switch IMAGE_PROVIDER to "gemini" for legible in-image text at demo quality.
     IMAGE_PROVIDER: str = "cloudflare"
-    IMAGE_MODEL: str = "@cf/bytedance/stable-diffusion-xl-lightning"
+    IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
     CLOUDFLARE_ACCOUNT_ID: str = ""
     CLOUDFLARE_API_TOKEN: str = ""
-    # stable-diffusion-xl-lightning's step-count field is "num_steps" (1-20,
-    # Cloudflare's own default is 20).
-    CLOUDFLARE_IMAGE_STEPS: int = Field(default=20, ge=1, le=20)
     # Gemini image generation (Interactions API) — renders headline text properly.
     GEMINI_API_KEY: str = ""
     GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image"

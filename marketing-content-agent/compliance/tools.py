@@ -75,52 +75,6 @@ def clamp_draft_metadata(
         if clamped.get(field):
             clamped[field] = _trim_text(str(clamped[field]), cap)
 
-    if ch == "email" and not any(clamped.get(k) for k in _LIMIT_FIELDS.get("email", ())):
-        # Enriched email schema (no flat body field): repeatedly trim body_close,
-        # then the longest benefit, then body_intro — re-measuring after each
-        # field — until the combined length fits or no field can be trimmed
-        # further (all at their floor lengths).
-        while True:
-            current = _length_from_metadata(ch, clamped)
-            if current is None or current <= char_limit:
-                break
-            over = current - char_limit
-            progress = False
-
-            if clamped.get("body_close"):
-                new_val = _trim_text(
-                    str(clamped["body_close"]),
-                    max(40, len(str(clamped["body_close"])) - over),
-                )
-                if new_val != str(clamped["body_close"]):
-                    clamped["body_close"] = new_val
-                    progress = True
-
-            if _length_from_metadata(ch, clamped) > char_limit:
-                benefits = list(clamped.get("benefits") or [])
-                if benefits:
-                    idx = max(range(len(benefits)), key=lambda i: len(str(benefits[i])))
-                    new_val = _trim_text(
-                        str(benefits[idx]), max(20, len(str(benefits[idx])) - over)
-                    )
-                    if new_val != str(benefits[idx]):
-                        benefits[idx] = new_val
-                        clamped["benefits"] = benefits
-                        progress = True
-
-            if _length_from_metadata(ch, clamped) > char_limit and clamped.get("body_intro"):
-                new_val = _trim_text(
-                    str(clamped["body_intro"]),
-                    max(40, len(str(clamped["body_intro"])) - over),
-                )
-                if new_val != str(clamped["body_intro"]):
-                    clamped["body_intro"] = new_val
-                    progress = True
-
-            if not progress:
-                break
-        return clamped
-
     if ch in {"email", "ad", "social"}:
         for key in _LIMIT_FIELDS.get(ch, ()):
             if clamped.get(key):
@@ -186,22 +140,6 @@ def _length_from_metadata(channel: str, draft_metadata: dict[str, Any] | None) -
     fields = _LIMIT_FIELDS.get(ch)
     if not fields:
         return None
-
-    if ch == "email":
-        # Prefer the flat body/content/copy field (legacy schema); else sum the
-        # enriched fields (body_intro + benefits + body_close).
-        for key in fields:
-            value = draft_metadata.get(key)
-            if value:
-                return len(str(value))
-        total = 0
-        if draft_metadata.get("body_intro"):
-            total += len(str(draft_metadata["body_intro"]))
-        for benefit in draft_metadata.get("benefits") or []:
-            total += len(str(benefit))
-        if draft_metadata.get("body_close"):
-            total += len(str(draft_metadata["body_close"]))
-        return total if total else None
 
     if ch == "linkedin":
         total = 0
@@ -401,54 +339,6 @@ def check_url_format(draft: str, channel: str, allowed_domains: list[str] | None
     return violations
 
 
-def check_email_footer(draft: str, draft_metadata: dict[str, Any] | None = None) -> list[str]:
-    """
-    Verify an email includes the legally-required footer elements:
-      - an unsubscribe mechanism (CAN-SPAM / GDPR), and
-      - a sender identity.
-    Checks the composed draft text first, then the structured footer metadata.
-    Returns a list of violation strings (empty = pass).
-    """
-    violations: list[str] = []
-    lower = draft.lower()
-    meta = draft_metadata or {}
-    footer = meta.get("footer") if isinstance(meta.get("footer"), dict) else {}
-
-    has_unsub = ("unsubscribe" in lower) or bool(
-        str(footer.get("unsubscribe_text") or "").strip()
-    )
-    if not has_unsub:
-        violations.append(
-            "Email is missing a required unsubscribe link/text (CAN-SPAM/GDPR)."
-        )
-
-    has_sender = bool(str(footer.get("sender_name") or "").strip())
-    if not has_sender and "unsubscribe" not in lower:
-        # Only flag missing sender identity when there's no footer at all;
-        # a sender name in free-text body is acceptable and hard to detect.
-        violations.append(
-            "Email is missing a sender identity in the footer."
-        )
-
-    return violations
-
-
-def check_subject_length(draft_metadata: dict[str, Any] | None = None) -> list[str]:
-    """
-    Advisory (non-blocking by default) check that the email subject line falls in
-    the 40–60 character best-practice band. Returned separately so callers can
-    decide whether to treat it as a hard violation.
-    """
-    violations: list[str] = []
-    meta = draft_metadata or {}
-    subject = str(meta.get("subject") or "").strip()
-    if subject and not (40 <= len(subject) <= 60):
-        violations.append(
-            f"Email subject is {len(subject)} chars — outside the 40–60 best-practice range."
-        )
-    return violations
-
-
 def run_all_checks(
     draft: str,
     channel: str,
@@ -457,13 +347,8 @@ def run_all_checks(
     extra_required: list[str] | None = None,
     allowed_domains: list[str] | None = None,
     draft_metadata: dict[str, Any] | None = None,
-    require_email_footer: bool = False,
 ) -> list[str]:
-    """Convenience function: run all deterministic checks and aggregate violations.
-
-    ``require_email_footer`` is opt-in (default False) so existing callers and
-    tests are unaffected; the compliance node enables it for email drafts.
-    """
+    """Convenience function: run all four checks and aggregate violations."""
     violations: list[str] = []
     violations.extend(check_restricted_words(draft, channel, brand))
     violations.extend(
@@ -471,6 +356,4 @@ def run_all_checks(
     )
     violations.extend(check_required_phrases(draft, channel, extra_required))
     violations.extend(check_url_format(draft, channel, allowed_domains))
-    if require_email_footer and channel.lower() == "email":
-        violations.extend(check_email_footer(draft, draft_metadata))
     return violations

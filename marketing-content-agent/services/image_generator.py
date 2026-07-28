@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 
 import httpx
 
@@ -19,38 +18,16 @@ def _cf_endpoint() -> str:
     return f"{_CF_BASE}/{settings.CLOUDFLARE_ACCOUNT_ID}/ai/run/{settings.IMAGE_MODEL}"
 
 
-def _cf_error_detail(resp: httpx.Response) -> str:
-    """Pull Cloudflare's own error message/code out of its JSON error envelope."""
-    try:
-        payload = resp.json()
-    except ValueError:
-        return resp.text[:300] or f"HTTP {resp.status_code} with an empty body"
-    errors = payload.get("errors") or []
-    if errors:
-        return "; ".join(f"{e.get('message', e)} (code {e.get('code')})" for e in errors)
-    return str(payload)[:300]
-
-
 def _decode_cf_response(resp: httpx.Response) -> bytes:
-    """Cloudflare returns either base64-in-JSON (flux) or raw image bytes (SDXL)."""
+    """Cloudflare returns either base64-in-JSON (flux) or raw PNG bytes (SDXL)."""
     ctype = resp.headers.get("content-type", "")
     if ctype.startswith("image/"):
         return resp.content
-
-    try:
-        payload = resp.json()
-    except ValueError as exc:
-        raise RuntimeError(
-            f"Cloudflare returned a non-image, non-JSON response: {resp.text[:300]!r}"
-        ) from exc
-
+    payload = resp.json()
     b64 = (payload.get("result") or {}).get("image", "")
     if not b64:
-        raise RuntimeError(f"Cloudflare image response had no image: {_cf_error_detail(resp)}")
-    try:
-        return base64.b64decode(b64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise RuntimeError(f"Cloudflare returned malformed base64 image data: {exc}") from exc
+        raise RuntimeError(f"Cloudflare image response had no image: {payload}")
+    return base64.b64decode(b64)
 
 
 def _generate_cloudflare(prompt: str) -> bytes:
@@ -58,29 +35,8 @@ def _generate_cloudflare(prompt: str) -> bytes:
         raise ValueError("Cloudflare image gen needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.")
 
     headers = {"Authorization": f"Bearer {settings.CLOUDFLARE_API_TOKEN}"}
-    # stable-diffusion-xl-lightning's field is "num_steps" (1-20, default 20).
-    body = {"prompt": prompt, "num_steps": settings.CLOUDFLARE_IMAGE_STEPS}
-    try:
-        resp = httpx.post(_cf_endpoint(), headers=headers, json=body, timeout=_TIMEOUT_S)
-    except httpx.TimeoutException as exc:
-        raise RuntimeError(f"Cloudflare image request timed out after {_TIMEOUT_S:.0f}s.") from exc
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"Cloudflare image request failed (network error): {exc}") from exc
-
-    if resp.status_code == 401 or resp.status_code == 403:
-        raise RuntimeError(
-            f"Cloudflare rejected the request as unauthorized ({resp.status_code}) — "
-            f"check CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN: {_cf_error_detail(resp)}"
-        )
-    if resp.status_code == 429:
-        raise RuntimeError(f"Cloudflare rate-limited the request (429): {_cf_error_detail(resp)}")
-    if resp.status_code >= 500:
-        raise RuntimeError(
-            f"Cloudflare service error ({resp.status_code}) — try again later: {_cf_error_detail(resp)}"
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Cloudflare image generation failed ({resp.status_code}): {_cf_error_detail(resp)}")
-
+    resp = httpx.post(_cf_endpoint(), headers=headers, json={"prompt": prompt}, timeout=_TIMEOUT_S)
+    resp.raise_for_status()
     return _decode_cf_response(resp)
 
 

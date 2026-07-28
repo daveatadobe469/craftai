@@ -4,28 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-# Supported campaign intents. Drives channel prompt framing (e.g. email.j2).
-# "general" is the backward-compatible default for briefs that omit the field.
-CampaignType = Literal[
-    "general",
-    "promotional",
-    "product_launch",
-    "newsletter",
-    "re_engagement",
-    "announcement",
-    "seasonal",
-]
-
-CAMPAIGN_TYPES: tuple[str, ...] = (
-    "general",
-    "promotional",
-    "product_launch",
-    "newsletter",
-    "re_engagement",
-    "announcement",
-    "seasonal",
-)
-
 
 class BriefPayload(BaseModel):
     brand: str = Field(..., min_length=1, max_length=100, description="Brand name")
@@ -35,10 +13,6 @@ class BriefPayload(BaseModel):
     persona: str = Field(..., min_length=1, max_length=100, description="Target persona name")
     key_message: str = Field(
         ..., min_length=10, max_length=1000, description="Core message the content must convey"
-    )
-    campaign_type: CampaignType = Field(
-        default="general",
-        description="Campaign intent — shapes prompt framing (e.g. product_launch, newsletter, re_engagement).",
     )
     constraints: dict[str, Any] = Field(
         default_factory=dict, description="Optional extra constraints (e.g. required phrases, allowed domains)"
@@ -62,7 +36,6 @@ class BriefPayload(BaseModel):
             "channel": "email",
             "persona": "Premium Buyer",
             "key_message": "Introducing our new platinum skincare line — clinically proven results in 14 days.",
-            "campaign_type": "product_launch",
             "constraints": {},
         }
     }}

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
 import mlflow
@@ -9,8 +8,6 @@ import mlflow
 from config import settings
 from db.sqlite import get_persona, write_audit
 from graph.state import AgentState
-
-logger = logging.getLogger(__name__)
 
 _VALID_CHANNELS = {"email", "linkedin", "social", "ad", "blog"}
 
@@ -33,12 +30,6 @@ async def orchestrator_node(state: AgentState) -> AgentState:
         channel = state.get("channel", "").strip().lower()
         persona_name = state.get("persona", "").strip()
         key_message = state.get("key_message", "").strip()
-        # campaign_type may arrive top-level or nested in constraints; default safely.
-        campaign_type = (
-            state.get("campaign_type")
-            or (state.get("constraints") or {}).get("campaign_type")
-            or "general"
-        )
 
         if not brand:
             raise ValueError("'brand' field is required and cannot be empty.")
@@ -54,16 +45,6 @@ async def orchestrator_node(state: AgentState) -> AgentState:
         loop = asyncio.get_event_loop()
         persona_profile = await loop.run_in_executor(None, get_persona, persona_name)
         if persona_profile is None:
-            logger.warning(
-                "Persona %r not found in SQLite — using generic default profile. "
-                "Content quality may degrade; ensure personas are seeded "
-                "(check db/persona_seed.py / migrations).",
-                persona_name,
-            )
-            sse_events.append(
-                f"[Orchestrator] WARNING: persona '{persona_name}' not found — "
-                "using generic default profile."
-            )
             persona_profile = {
                 "name": persona_name,
                 "description": f"A {persona_name} customer segment.",
@@ -131,7 +112,6 @@ async def orchestrator_node(state: AgentState) -> AgentState:
             "channel": channel,
             "persona": persona_name,
             "key_message": key_message,
-            "campaign_type": campaign_type,
             "constraints": constraints,
             "plan": plan_steps,
             "revision_count": state.get("revision_count") or 0,
