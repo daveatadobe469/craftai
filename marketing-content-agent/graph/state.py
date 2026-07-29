@@ -11,6 +11,7 @@ class AgentState(TypedDict, total=False):
     channel: Literal["email", "linkedin", "social", "ad", "blog"]
     persona: str
     key_message: str
+    campaign_type: str
     constraints: dict[str, Any]
 
     # ── RAG context ───────────────────────────────────────────────────────────

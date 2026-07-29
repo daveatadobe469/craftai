@@ -93,19 +93,70 @@ def _try_load_json(blob: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_field(raw: str, key: str, *, multiline: bool = False) -> str | None:
+    m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, re.DOTALL)
+    if not m:
+        return None
+    text = m.group(1).replace("\\n", "\n" if multiline else " ")
+    return text.strip()
+
+
+def _extract_string_list(raw: str, key: str) -> list[str]:
+    m = re.search(rf'"{key}"\s*:\s*\[(.*?)\]', raw, re.DOTALL)
+    if not m:
+        return []
+    return [
+        item.replace("\\n", " ").strip()
+        for item in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+        if item.strip()
+    ]
+
+
 def _extract_email_fields(raw: str) -> dict[str, Any] | None:
     subject = re.search(r'"subject"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, re.DOTALL)
     body = re.search(r'"body"\s*:\s*"(.*?)"\s*,\s*"cta"\s*:', raw, re.DOTALL)
     cta = re.search(r'"cta"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, re.DOTALL)
     if not body:
         body = re.search(r'"body"\s*:\s*"(.*?)"\s*\n?\s*\}', raw, re.DOTALL)
-    if not body:
-        return None
-    data: dict[str, Any] = {"body": body.group(1).replace("\\n", "\n").strip()}
+
+    data: dict[str, Any] = {}
+    if body:
+        data["body"] = body.group(1).replace("\\n", "\n").strip()
+    else:
+        # Enriched schema (no flat "body" field): pull the paragraph fields
+        # the current email.j2 template asks the model for instead.
+        body_intro = _extract_field(raw, "body_intro", multiline=True)
+        benefits = _extract_string_list(raw, "benefits")
+        body_close = _extract_field(raw, "body_close", multiline=True)
+        if not (body_intro or benefits or body_close):
+            return None
+        if body_intro:
+            data["body_intro"] = body_intro
+        if benefits:
+            data["benefits"] = benefits
+        if body_close:
+            data["body_close"] = body_close
+
     if subject:
         data["subject"] = subject.group(1).replace("\\n", " ").strip()
     if cta:
         data["cta"] = cta.group(1).replace("\\n", " ").strip()
+
+    preheader = _extract_field(raw, "preheader")
+    if preheader:
+        data["preheader"] = preheader
+    secondary_cta = _extract_field(raw, "secondary_cta")
+    if secondary_cta:
+        data["secondary_cta"] = secondary_cta
+
+    sender_name = _extract_field(raw, "sender_name")
+    unsubscribe_text = _extract_field(raw, "unsubscribe_text")
+    if sender_name or unsubscribe_text:
+        data["footer"] = {
+            "sender_name": sender_name or "",
+            "unsubscribe_text": unsubscribe_text or "",
+        }
+
     return data
 
 
@@ -137,11 +188,32 @@ def compose_draft_text(data: dict[str, Any], channel: str) -> str:
     if ch == "email":
         if data.get("subject"):
             parts.append(f"Subject: {data['subject']}")
+        if data.get("preheader"):
+            parts.append(f"Preview: {data['preheader']}")
+        # Enriched schema: body_intro + benefits + body_close.
+        # Falls back to the flat body/content/copy field for older drafts.
         body = data.get("body") or data.get("content") or data.get("copy")
         if body:
             parts.append(str(body))
+        else:
+            if data.get("body_intro"):
+                parts.append(str(data["body_intro"]))
+            for benefit in data.get("benefits") or []:
+                if benefit:
+                    parts.append(f"• {benefit}")
+            if data.get("body_close"):
+                parts.append(str(data["body_close"]))
         if data.get("cta"):
             parts.append(f"CTA: {data['cta']}")
+        if data.get("secondary_cta"):
+            parts.append(f"CTA: {data['secondary_cta']}")
+        footer = data.get("footer")
+        if isinstance(footer, dict):
+            sender = str(footer.get("sender_name") or "").strip()
+            unsub = str(footer.get("unsubscribe_text") or "").strip()
+            footer_bits = [b for b in (sender, unsub) if b]
+            if footer_bits:
+                parts.append(" · ".join(footer_bits))
         return "\n\n".join(parts)
 
     if ch == "linkedin":

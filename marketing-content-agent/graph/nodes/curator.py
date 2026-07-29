@@ -41,7 +41,6 @@ async def curator_node(state: AgentState) -> AgentState:
         mlflow_run_id = state.get("mlflow_run_id", "")
 
         final_content = human_edits.strip() if human_edits and human_edits.strip() else draft
-        final_content = " ".join(final_content.split())
 
         sse_events.append("[Curator] Normalising and chunking approved content…")
 
