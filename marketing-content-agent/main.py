@@ -106,13 +106,16 @@ def check_env() -> None:
         else:
             warn(".env file not found. Create it with at least: GROQ_API_KEY=your_key")
 
-    # Load .env into os.environ
+    # Load .env into os.environ. Uses python-dotenv's parser rather than a
+    # manual split on "=" — a naive parser takes an inline "KEY=value  # note"
+    # comment as part of the value, which then shadows the correctly-parsed
+    # .env file inside Settings() (real os.environ vars win over env_file) and
+    # crashes numeric/int fields like JUDGE_THRESHOLD with a validation error.
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
+        from dotenv import dotenv_values
+        for k, v in dotenv_values(env_path).items():
+            if v is not None:
+                os.environ.setdefault(k, v)
 
     api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:

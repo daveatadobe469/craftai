@@ -11,6 +11,7 @@ Tools:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from typing import Any
@@ -102,12 +103,19 @@ def render_campaign_html(brief_id: str) -> str:
 
 
 @mcp.tool()
-def send_campaign_email(brief_id: str, to: str = "") -> str:
+async def send_campaign_email(brief_id: str, to: str = "") -> str:
     """Render and send the campaign email for a brief over SMTP."""
     built = _compose(brief_id, to)
     if built is None:
         return json.dumps({"status": "error", "detail": f"No brief found for id '{brief_id}'."})
-    ok, detail = sender.send_smtp(built["eml"], settings.SENDER, built["to"])
+    # send_smtp is a blocking smtplib call (up to the 20s connect/banner timeout
+    # on a slow or firewalled network) — run it off-thread so it doesn't stall
+    # this server's single event loop, which would otherwise freeze every other
+    # in-flight MCP tool call (render/send, for this brief or any other) for the
+    # same duration.
+    ok, detail = await asyncio.to_thread(
+        sender.send_smtp, built["eml"], settings.SENDER, built["to"]
+    )
     return json.dumps({
         "status": "sent" if ok else "error",
         "detail": detail,
