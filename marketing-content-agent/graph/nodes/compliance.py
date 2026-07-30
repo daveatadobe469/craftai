@@ -176,6 +176,7 @@ async def compliance_node(state: AgentState) -> AgentState:
             extra_required=None,
             allowed_domains=None,
             draft_metadata=state.get("draft_metadata") or {},
+            require_email_footer=True,
         )
 
         live(f"[Compliance] Rule check complete — {len(violations)} violation(s) found.")

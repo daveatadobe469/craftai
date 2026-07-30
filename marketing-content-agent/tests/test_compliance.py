@@ -5,8 +5,10 @@ import pytest
 from compliance.tools import (
     _effective_length,
     check_char_limits,
+    check_email_footer,
     check_required_phrases,
     check_restricted_words,
+    check_subject_length,
     check_url_format,
     length_from_metadata,
     run_all_checks,
@@ -189,6 +191,46 @@ class TestCheckUrlFormat:
         draft = "See our offer at https://bit.ly/abc123 now."
         result = check_url_format(draft, channel="email")
         assert any("shortened" in v.lower() or "bit.ly" in v.lower() for v in result)
+
+
+# ─── check_email_footer ───────────────────────────────────────────────────────
+
+class TestCheckEmailFooter:
+    def test_missing_footer_flags_unsubscribe(self):
+        draft = "Subject: Hi\n\nGreat offer inside.\n\nCTA: Shop"
+        result = check_email_footer(draft, {})
+        assert any("unsubscribe" in v.lower() for v in result)
+
+    def test_unsubscribe_in_text_passes(self):
+        draft = "Subject: Hi\n\nGreat offer.\n\nCTA: Shop\n\nGlowBrand · Unsubscribe"
+        result = check_email_footer(draft, {})
+        assert result == []
+
+    def test_footer_metadata_passes(self):
+        draft = "Subject: Hi\n\nBody."
+        meta = {"footer": {"sender_name": "GlowBrand", "unsubscribe_text": "Unsubscribe"}}
+        result = check_email_footer(draft, meta)
+        assert result == []
+
+    def test_run_all_checks_opt_in_footer_flags_email(self):
+        draft = "Discover premium skincare. Elevate your routine."
+        without = run_all_checks(draft=draft, channel="email", brand="GlowBrand")
+        with_footer = run_all_checks(
+            draft=draft, channel="email", brand="GlowBrand", require_email_footer=True
+        )
+        assert without == []
+        assert any("unsubscribe" in v.lower() for v in with_footer)
+
+
+class TestCheckSubjectLength:
+    def test_subject_in_band_passes(self):
+        assert check_subject_length({"subject": "A" * 50}) == []
+
+    def test_subject_too_short_flags(self):
+        assert check_subject_length({"subject": "Hi"}) != []
+
+    def test_no_subject_no_violation(self):
+        assert check_subject_length({}) == []
 
 
 # ─── run_all_checks integration ───────────────────────────────────────────────

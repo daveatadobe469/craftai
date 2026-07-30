@@ -136,6 +136,52 @@ _CHANNEL_EXAMPLES: list[dict[str, str]] = [
             "saves money, and supports your local community."
         ),
     },
+    # ── Per-campaign-type email exemplars (grounded, with compliance footer) ──
+    {
+        "channel": "email",
+        "brand": "GlowBrand",
+        "persona": "Premium Empty Nesters",
+        "campaign_type": "newsletter",
+        "content": (
+            "Subject: This Month in Skin Science — 3 Reads for You\n"
+            "Preview: Fresh research, a ritual refresh, and a member spotlight.\n"
+            "Body: Hi {{first_name}}, here's what caught our dermatologists' attention this month. "
+            "First, new data on marine peptides and collagen synthesis. Second, how to adapt your "
+            "evening ritual for drier seasons. Third, a member who transformed her routine in 14 days.\n"
+            "CTA: Read the Digest\n"
+            "GlowBrand · Unsubscribe"
+        ),
+    },
+    {
+        "channel": "email",
+        "brand": "GlowBrand",
+        "persona": "Premium Empty Nesters",
+        "campaign_type": "re_engagement",
+        "content": (
+            "Subject: We Saved Your Spot, {{first_name}}\n"
+            "Preview: Your personalised ritual is still waiting.\n"
+            "Body: It's been a while, and your skin's needs may have changed. Your saved Platinum "
+            "regimen is still here — clinically shown to reduce fine lines by 47% in 14 days. "
+            "Pick up right where you left off, no pressure.\n"
+            "CTA: Resume My Routine\n"
+            "GlowBrand · Unsubscribe"
+        ),
+    },
+    {
+        "channel": "email",
+        "brand": "TechNova",
+        "persona": "Digital Professionals",
+        "campaign_type": "announcement",
+        "content": (
+            "Subject: Introducing TechNova Pro 2.0 — Faster, Together\n"
+            "Preview: The update your workflow has been waiting for.\n"
+            "Body: Hi {{first_name}}, TechNova Pro 2.0 is here. Real-time collaboration is now built "
+            "in, benchmark throughput is up 312% over the prior release, and setup still takes under "
+            "5 minutes. Here's what's new and why it matters for your team.\n"
+            "CTA: See What's New\n"
+            "TechNova · Unsubscribe"
+        ),
+    },
 ]
 
 _SOCIAL_EXAMPLES: list[dict[str, str]] = [
@@ -177,6 +223,7 @@ def seed_campaigns() -> None:
             "channel": e["channel"],
             "brand": e["brand"],
             "persona": e["persona"],
+            "campaign_type": e.get("campaign_type", "general"),
             "type": "approved_campaign",
             "judge_score": 0.9,
         }
